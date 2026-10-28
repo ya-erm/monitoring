@@ -21,7 +21,7 @@ let browser;
 try {
   browser = await chromium.launch({ headless: true,
     ...(process.env.PLAYWRIGHT_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE } : {}) });
-  const page = await browser.newPage();
+  const page = await browser.newPage({ timezoneId: "Europe/Belgrade" });
   const errors = [];
   const external = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -32,14 +32,36 @@ try {
   assert.equal(await page.locator("#dashboard").isVisible(), false);
   assert.deepEqual(external, [], "Disabled UI made an external request");
 
+  const settled = () => page.waitForFunction(() => document.getElementById("charts").getAttribute("aria-busy") === "false");
+  const windowOf = () => page.locator(".chart svg").first().evaluate((svg) => ({
+    start: Number(svg.dataset.start), end: Number(svg.dataset.end),
+  }));
+  const choosePeriod = async (hours) => {
+    await page.locator("#range").click();
+    await page.locator(`[data-hours="${hours}"]`).click();
+    await settled();
+    const range = await windowOf();
+    assert.equal(range.end - range.start, hours * 3600);
+  };
+  const localInput = (ts) => page.evaluate((value) => {
+    const d = new Date(value * 1000), pad = (v) => String(v).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }, ts);
   await page.goto(`${base}/?demo=1`);
-  await page.waitForFunction(() => document.querySelectorAll(".chart svg").length === 6);
+  await page.waitForFunction(() => document.querySelectorAll(".chart svg").length === 5);
   assert.match(await page.locator("#status").innerText(), /Демо/);
-  for (const width of [390, 1440]) {
+  for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
       `Horizontal overflow at ${width}px`);
+    await page.locator("#range").click();
+    assert.equal(await page.locator("#range-dialog [data-hours]").count(), 7);
+    assert.match(await page.locator("#range-timezone").innerText(), /Europe\/Belgrade/);
+    assert.equal(await page.locator("#range-dialog").evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth), true);
+    await page.keyboard.press("Escape");
   }
+  for (const hours of [1, 2, 3, 6, 24, 168, 720]) await choosePeriod(hours);
+  await choosePeriod(6);
   if (process.env.MONITOR_SCREENSHOT) {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => document.fonts.ready);
@@ -52,9 +74,15 @@ try {
     await page.locator(".toolbar").screenshot({
       path: process.env.MONITOR_SCREENSHOT.replace(/\.png$/, "-controls.png"),
     });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator("#range").click();
+    await page.locator("#range-dialog").screenshot({
+      path: process.env.MONITOR_SCREENSHOT.replace(/\.png$/, "-period.png"),
+    });
+    await page.keyboard.press("Escape");
   }
-  await page.locator("#range").selectOption("720");
-  await page.waitForFunction(() => document.querySelectorAll(".legend span").length === 13);
+  await choosePeriod(720);
+  assert.equal(await page.locator(".legend button").count(), 13);
   assert.equal(await page.locator("path[d*='NaN']").count(), 0);
   assert.deepEqual(external, [], "Demo made an external request");
 
@@ -82,10 +110,74 @@ try {
   await page.goto(base);
   await page.waitForFunction(() => document.getElementById("status").textContent === "Данные поступают");
   assert.equal(await page.locator(".metric-value").nth(2).innerText(), "—");
-  assert.equal(await page.locator(".chart svg").count(), 6);
-  await page.locator("#range").selectOption("168");
-  await page.waitForFunction(() => document.querySelectorAll(".legend span").length === 13);
+  assert.equal(await page.locator(".chart svg").count(), 5);
+  await choosePeriod(168);
+  assert.equal(await page.locator(".legend button").count(), 13);
   assert.ok(received.some((url) => url.includes("/days/")));
+
+  const memory = page.locator(".chart").filter({ hasText: "Память · %" });
+  await memory.getByRole("button", { name: "Swap", exact: true }).click();
+  assert.equal(await memory.getByRole("button", { name: "Swap", exact: true }).getAttribute("aria-pressed"), "false");
+  assert.equal(await memory.locator('path[data-series="Swap"]').getAttribute("display"), "none");
+  await choosePeriod(3);
+  assert.equal(await memory.locator('path[data-series="Swap"]').getAttribute("display"), "none");
+  await memory.getByRole("button", { name: "Swap", exact: true }).click();
+  await memory.getByRole("button", { name: "RAM", exact: true }).click();
+  assert.equal(await memory.locator('path[data-series="RAM"]').getAttribute("display"), "none");
+  assert.equal(await memory.locator('path[data-series="Swap"]').getAttribute("display"), null);
+
+  // An exact local-time interval crossing UTC midnight must request both UTC dates.
+  const previousDay = new Date((now - 2 * 86400) * 1000);
+  previousDay.setUTCHours(0, 30, 0, 0);
+  const customEnd = previousDay.getTime() / 1000, customStart = customEnd - 3600;
+  await page.locator("#range").click();
+  await page.locator("#range-from").fill(await localInput(customStart));
+  await page.locator("#range-to").fill(await localInput(customEnd));
+  await page.getByRole("button", { name: "Применить", exact: true }).click();
+  await settled();
+  assert.deepEqual(await windowOf(), { start: customStart, end: customEnd });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
+    "An exact date range overflowed the mobile toolbar");
+  for (const ts of [customStart, customEnd]) {
+    const iso = new Date(ts * 1000).toISOString();
+    assert.ok(received.some((url) => url.includes(`/hours/${iso.slice(0, 10)}/${iso.slice(11, 13)}.json`)));
+  }
+  await page.locator("#refresh").click();
+  await settled();
+  assert.deepEqual(await windowOf(), { start: customStart, end: customEnd }, "Refresh moved a fixed interval");
+
+  await page.locator("#range").click();
+  await page.locator("#range-from").fill(await localInput(customEnd));
+  await page.locator("#range-to").fill(await localInput(customStart));
+  await page.getByRole("button", { name: "Применить", exact: true }).click();
+  assert.equal(await page.locator("#range-dialog").evaluate((dialog) => dialog.open), true);
+  assert.match(await page.locator("#range-error").innerText(), /позже/);
+  await page.locator("#range-from").fill(await localInput(customEnd - 32 * 86400));
+  await page.locator("#range-to").fill(await localInput(customEnd));
+  await page.getByRole("button", { name: "Применить", exact: true }).click();
+  assert.match(await page.locator("#range-error").innerText(), /31 день/);
+  await page.locator("#range-cancel").click();
+  assert.deepEqual(await windowOf(), { start: customStart, end: customEnd });
+
+  // Reverse dragging zooms all charts, and Back restores the exact previous bounds.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const plot = await page.locator(".plot-hit").first().boundingBox();
+  await page.mouse.move(plot.x + plot.width * .8, plot.y + plot.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(plot.x + plot.width * .3, plot.y + plot.height / 2, { steps: 8 });
+  assert.equal(await page.locator(".plot-selection:not([display])").count(), 1);
+  await page.mouse.up();
+  await settled();
+  const zoomed = await windowOf();
+  assert.ok(Math.abs((zoomed.end - zoomed.start) - 1800) < 3);
+  assert.ok(zoomed.start > customStart && zoomed.end < customEnd);
+  assert.equal(await page.locator(".chart svg").evaluateAll((charts) =>
+    new Set(charts.map((svg) => `${svg.dataset.start}:${svg.dataset.end}`)).size), 1);
+  await page.locator("#range-back").click();
+  await settled();
+  assert.deepEqual(await windowOf(), { start: customStart, end: customEnd });
+  await choosePeriod(1);
 
   point.ts = now - 600;
   await page.locator("#refresh").click();
@@ -95,7 +187,7 @@ try {
   await page.waitForFunction(() => document.getElementById("status").textContent === "Ошибка чтения");
   assert.match(await page.locator("#notice").innerText(), /503/);
   assert.deepEqual(errors, []);
-  console.log("PASS: disabled/no network; demo; 390/1440px; hourly/daily data; nulls; stale data; HTTP failure.");
+  console.log("PASS: disabled/demo; mobile/desktop picker; 7 presets; exact local/UTC dates; validation; fixed refresh; reverse drag/undo; RAM/swap toggles; stale data; HTTP failure.");
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));

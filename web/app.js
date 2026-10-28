@@ -8,6 +8,139 @@ const palette = ["#008f84", "#dd883b", "#7564c4", "#d05976"];
 const cache = new Map();
 let controller;
 let busy = false;
+let selecting = false;
+let selectedRange = { type: "relative", hours: 6 };
+const rangeHistory = [];
+const hiddenSeries = new Set();
+const presets = new Map([[1, "1 час"], [2, "2 часа"], [3, "3 часа"], [6, "6 часов"],
+  [24, "Сутки"], [168, "Неделя"], [720, "Месяц"]]);
+
+function rangeWindow(now = Math.floor(Date.now() / 1000)) {
+  return selectedRange.type === "relative"
+    ? { start: now - selectedRange.hours * 3600, end: now }
+    : { start: selectedRange.start, end: selectedRange.end };
+}
+
+function localDateTime(ts) {
+  const date = new Date(ts * 1000);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function parseLocalDateTime(value) {
+  const ts = new Date(value).getTime() / 1000;
+  // Round-trip validation also rejects impossible dates / skipped DST clock times.
+  return Number.isFinite(ts) && localDateTime(ts) === value ? Math.floor(ts) : null;
+}
+
+function updateRangeLabel() {
+  if (selectedRange.type === "relative") byId("range-value").textContent = presets.get(selectedRange.hours);
+  else {
+    const { start, end } = selectedRange;
+    const from = new Date(start * 1000), to = new Date(end * 1000);
+    const options = { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" };
+    if (from.getFullYear() !== new Date().getFullYear() || from.getFullYear() !== to.getFullYear()) options.year = "numeric";
+    const endLabel = from.toDateString() === to.toDateString()
+      ? to.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+      : to.toLocaleString("ru-RU", options);
+    byId("range-value").textContent = `${from.toLocaleString("ru-RU", options)} — ${endLabel}`;
+  }
+  byId("range-back").hidden = rangeHistory.length === 0;
+}
+
+function applyRange(next) {
+  if (JSON.stringify(next) !== JSON.stringify(selectedRange)) {
+    rangeHistory.push({ ...selectedRange });
+    if (rangeHistory.length > 20) rangeHistory.shift();
+  }
+  selectedRange = next;
+  byId("range-feedback").textContent = "";
+  updateRangeLabel();
+  refresh();
+}
+
+function openRangeDialog() {
+  const { start, end } = rangeWindow();
+  byId("range-from").value = localDateTime(start);
+  byId("range-to").value = localDateTime(end);
+  for (const id of ["range-from", "range-to"]) byId(id).max = localDateTime(Math.floor(Date.now() / 1000));
+  byId("range-error").textContent = "";
+  byId("range-timezone").textContent = `Ваш часовой пояс: ${Intl.DateTimeFormat().resolvedOptions().timeZone}.`;
+  for (const button of document.querySelectorAll("[data-hours]")) {
+    button.setAttribute("aria-pressed", String(selectedRange.type === "relative"
+      && selectedRange.hours === Number(button.dataset.hours)));
+  }
+  byId("range-dialog").showModal();
+}
+
+function applyDateFields(event) {
+  event.preventDefault();
+  const start = parseLocalDateTime(byId("range-from").value);
+  const end = parseLocalDateTime(byId("range-to").value);
+  let error = "";
+  if (start === null || end === null) error = "Укажите корректные дату и время в обоих полях.";
+  else if (end <= start) error = "Время «До» должно быть позже времени «От».";
+  else if (end - start < 60) error = "Выберите интервал не короче минуты.";
+  else if (end - start > 31 * 86400) error = "Максимальная длина интервала — 31 день.";
+  else if (end > Math.floor(Date.now() / 1000)) error = "Конец интервала не может быть в будущем.";
+  byId("range-error").textContent = error;
+  if (error) return;
+  byId("range-dialog").close();
+  applyRange({ type: "absolute", start, end });
+}
+
+function enableChartSelection(svg, left, right, top, bottom, start, end) {
+  const hit = svgNode("rect", { x: left, y: top, width: right - left,
+    height: bottom - top, class: "plot-hit", "aria-hidden": "true" });
+  const selection = svgNode("rect", { y: top, height: bottom - top,
+    width: 0, class: "plot-selection", display: "none", "aria-hidden": "true" });
+  svg.append(hit, selection);
+  let gesture = null;
+  const xAt = (event) => {
+    const point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    return Math.max(left, Math.min(right, point.matrixTransform(svg.getScreenCTM().inverse()).x));
+  };
+  hit.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || event.button !== 0) return;
+    gesture = { id: event.pointerId, x: xAt(event), clientX: event.clientX };
+    selecting = true;
+    hit.setPointerCapture(event.pointerId);
+    if (event.pointerType === "mouse") event.preventDefault();
+  });
+  hit.addEventListener("pointermove", (event) => {
+    if (!gesture || gesture.id !== event.pointerId) return;
+    const x = xAt(event);
+    selection.setAttribute("x", Math.min(gesture.x, x));
+    selection.setAttribute("width", Math.abs(x - gesture.x));
+    selection.removeAttribute("display");
+  });
+  const finish = (event, cancelled = false) => {
+    if (!gesture || gesture.id !== event.pointerId) return;
+    const previous = gesture;
+    gesture = null;
+    selecting = false;
+    selection.setAttribute("display", "none");
+    if (hit.hasPointerCapture(event.pointerId)) hit.releasePointerCapture(event.pointerId);
+    if (cancelled || Math.abs(event.clientX - previous.clientX) < 8) return;
+    const x = xAt(event);
+    const from = Math.round(start + (Math.min(previous.x, x) - left) / (right - left) * (end - start));
+    const to = Math.round(start + (Math.max(previous.x, x) - left) / (right - left) * (end - start));
+    if (to - from < 60) {
+      byId("range-feedback").textContent = "Выберите на графике интервал не короче минуты.";
+      return;
+    }
+    applyRange({ type: "absolute", start: from, end: to });
+  };
+  hit.addEventListener("pointerup", (event) => finish(event));
+  hit.addEventListener("pointercancel", (event) => finish(event, true));
+  hit.addEventListener("lostpointercapture", () => {
+    gesture = null;
+    selecting = false;
+    selection.setAttribute("display", "none");
+  });
+}
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -60,7 +193,9 @@ function summary(sample) {
 function drawChart(title, series, rows, start, end, resolution, fixedMax, format) {
   const card = element("article", "chart");
   card.append(element("h2", "", title));
-  const svg = svgNode("svg", { viewBox: "0 0 600 230", role: "img", "aria-label": title });
+  const svg = svgNode("svg", { viewBox: "0 0 600 230", role: "img", "aria-label": title,
+    "aria-describedby": "chart-range-help", "data-start": start, "data-end": end,
+    "data-resolution": resolution });
   svg.append(svgNode("title", {}, `${title}. ${rows.length} измерений; пропуски показаны разрывами.`));
   const left = 52, right = 586, top = 12, bottom = 188;
   const values = series.flatMap((s) => rows.map(s.value)).filter(Number.isFinite);
@@ -79,6 +214,7 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
       ? { day: "2-digit", month: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
     svg.append(svgNode("text", { x: x(ts), y: 216, "text-anchor": i === 0 ? "start" : i === 3 ? "end" : "middle" }, label));
   }
+  const paths = [];
   series.forEach((line, index) => {
     let path = "", previous = null;
     for (const row of rows) {
@@ -88,17 +224,35 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
       path += `${joined ? "L" : "M"}${x(row.ts).toFixed(2)},${y(value).toFixed(2)} `;
       previous = row.ts;
     }
-    svg.append(svgNode("path", { d: path, fill: "none", stroke: palette[index],
+    const stroke = svgNode("path", { d: path, fill: "none", stroke: palette[index],
       "stroke-width": 2, "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke",
-      ...(line.dashed ? { "stroke-dasharray": "4 4" } : {}) }));
+      "data-series": line.label,
+      ...(line.dashed ? { "stroke-dasharray": "4 4" } : {}) });
+    if (hiddenSeries.has(`${title}:${line.label}`)) stroke.setAttribute("display", "none");
+    paths.push(stroke);
+    svg.append(stroke);
   });
+  enableChartSelection(svg, left, right, top, bottom, start, end);
   const legend = element("div", "legend");
   series.forEach((line, index) => {
-    const item = element("span", "", line.label);
+    const key = `${title}:${line.label}`;
+    const item = element("button", "legend-item", line.label);
+    item.type = "button";
+    item.setAttribute("aria-pressed", String(!hiddenSeries.has(key)));
     item.style.setProperty("--series-color", palette[index]);
+    item.addEventListener("click", () => {
+      if (hiddenSeries.has(key)) hiddenSeries.delete(key);
+      else hiddenSeries.add(key);
+      const visible = !hiddenSeries.has(key);
+      item.setAttribute("aria-pressed", String(visible));
+      if (visible) paths[index].removeAttribute("display");
+      else paths[index].setAttribute("display", "none");
+    });
     legend.append(item);
   });
   card.append(svg, legend);
+  if (title === "Load average") card.append(element("p", "chart-note",
+    "Среднее число задач на CPU, в очереди к CPU и в непрерываемом ожидании I/O."));
   byId("charts").append(card);
 }
 
@@ -112,16 +266,15 @@ function render(rows, start, end, resolution) {
   const chart = (title, series, max = null, format = (v) => number(v)) =>
     drawChart(title, series, rows, start, end, resolution, max, format);
   chart("CPU · %", cpu, 100, (v) => number(v, 0));
-  chart("RAM · %", [{ label: "Занято без доступного кэша", value: memoryPct }], 100, (v) => number(v, 0));
+  chart("Память · %", [{ label: "RAM", value: memoryPct }, { label: "Swap", value: swapPct }], 100, (v) => number(v, 0));
   chart("Сеть · МиБ/с", [field("Входящий", "net_rx_bytes_s", 2 ** 20), field("Исходящий", "net_tx_bytes_s", 2 ** 20)]);
   chart("Load average", [field("1 минута", "load1"), field("5 минут", "load5"), field("15 минут", "load15")]);
   chart("Дисковый I/O · МиБ/с", [field("Чтение", "disk_read_bytes_s", 2 ** 20), field("Запись", "disk_write_bytes_s", 2 ** 20)]);
-  chart("Swap · %", [{ label: "Занято", value: swapPct }], 100, (v) => number(v, 0));
 }
 
 function demoData(start, end, resolution) {
   const rows = [];
-  for (let ts = Math.floor(start / resolution) * resolution; ts <= end; ts += resolution) {
+  for (let ts = Math.ceil(start / resolution) * resolution; ts <= end; ts += resolution) {
     const phase = ts / 1800;
     const cpu = 18 + 12 * Math.sin(phase) + (Math.sin(phase / 4) > .9 ? 58 : 0);
     // Deliberate synthetic interruption makes missing samples visible in preview.
@@ -198,10 +351,10 @@ async function refresh() {
   controller = new AbortController();
   const own = controller;
   busy = true;
-  const end = Math.floor(Date.now() / 1000);
-  const hours = Number(byId("range").value);
-  const start = end - hours * 3600;
-  const resolution = hours > 24 ? 300 : (demo ? 15 : null);
+  byId("charts").setAttribute("aria-busy", "true");
+  const now = Math.floor(Date.now() / 1000);
+  const { start, end } = rangeWindow(now);
+  const resolution = end - start > 86400 ? 300 : (demo ? 15 : null);
   try {
     let rows, actualResolution, latest;
     if (demo) {
@@ -222,7 +375,7 @@ async function refresh() {
     summary(latest);
     render(rows, start, end, actualResolution);
     byId("updated").textContent = `Последнее измерение: ${new Date(latest.ts * 1000).toLocaleString("ru-RU")}`;
-    const stale = end - latest.ts > (config.staleAfterSeconds || 150);
+    const stale = now - latest.ts > (config.staleAfterSeconds || 150);
     setStatus(demo ? "Демо · вымышленные данные" : stale ? "Данные не обновляются" : "Данные поступают", stale || demo);
     byId("notice").textContent = demo ? "Предпросмотр на вымышленных данных. Сбор и S3 не используются."
       : stale ? "Новых измерений нет. На графиках сохранённая история; причина недоступности сервера неизвестна."
@@ -234,17 +387,50 @@ async function refresh() {
       ? "Не удалось загрузить данные. Проверьте HTTPS-адрес, доступность S3 и CORS."
       : error.message;
   } finally {
-    if (controller === own) busy = false;
+    if (controller === own) {
+      busy = false;
+      byId("charts").setAttribute("aria-busy", "false");
+    }
   }
 }
 
 byId("title").textContent = config.title || "Сервер";
 if (demo || config.enabled === true) {
   byId("dashboard").hidden = false;
-  byId("range").addEventListener("change", refresh);
+  updateRangeLabel();
+  byId("range").addEventListener("click", openRangeDialog);
+  byId("range-form").addEventListener("submit", applyDateFields);
+  for (const id of ["range-close", "range-cancel"]) {
+    byId(id).addEventListener("click", () => byId("range-dialog").close());
+  }
+  byId("range-dialog").addEventListener("click", (event) => {
+    const rect = byId("range-dialog").getBoundingClientRect();
+    if (event.target === byId("range-dialog") && (event.clientX < rect.left || event.clientX > rect.right
+        || event.clientY < rect.top || event.clientY > rect.bottom)) byId("range-dialog").close();
+  });
+  for (const button of document.querySelectorAll("[data-hours]")) {
+    button.addEventListener("click", () => {
+      byId("range-dialog").close();
+      applyRange({ type: "relative", hours: Number(button.dataset.hours) });
+    });
+  }
+  for (const id of ["range-from", "range-to"]) byId(id).addEventListener("input", () => {
+    byId("range-error").textContent = "";
+    for (const button of document.querySelectorAll("[data-hours]")) button.setAttribute("aria-pressed", "false");
+  });
+  byId("range-back").addEventListener("click", () => {
+    const previous = rangeHistory.pop();
+    if (!previous) return;
+    selectedRange = previous;
+    byId("range-feedback").textContent = "";
+    updateRangeLabel();
+    refresh();
+  });
   byId("refresh").addEventListener("click", () => { cache.clear(); refresh(); });
   refresh();
-  setInterval(() => { if (!document.hidden && !busy) refresh(); }, Math.max(30, config.refreshSeconds || 60) * 1000);
+  setInterval(() => {
+    if (!document.hidden && !busy && !selecting && !byId("range-dialog").open) refresh();
+  }, Math.max(30, config.refreshSeconds || 60) * 1000);
 } else {
   byId("notice").textContent = "Мониторинг выключен. Запросы к S3 не выполняются. Для локального предпросмотра добавьте ?demo=1 к адресу страницы.";
 }

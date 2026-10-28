@@ -22,15 +22,19 @@ h2 { font-size: 17px; margin: 0 0 12px; font-weight: 650; }
 .notice { padding: 16px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
 .notice:empty { display: none; }
 .toolbar { margin: 24px 0; }
-label { display: flex; align-items: center; gap: 10px; }
-button, select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; min-height: 44px; }
-.select-field { position: relative; display: inline-flex; }
-.select-field select { appearance: none; -webkit-appearance: none; padding-right: 38px; }
-.select-arrow { position: absolute; right: 12px; top: 50%; width: 16px; height: 16px; transform: translateY(-50%); pointer-events: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+button, input { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; min-height: 44px; }
+.period-control { display: flex; align-items: center; gap: 10px; max-width: 100%; min-width: 0; }
+#range { display: inline-flex; align-items: center; justify-content: space-between; gap: 14px; text-align: left; min-width: 0; }
+#range-value { min-width: 0; overflow-wrap: anywhere; }
+.range-chevron { width: 16px; height: 16px; flex: 0 0 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
-button:focus-visible, select:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 #updated { color: var(--muted); font-size: 12px; margin-left: auto; }
+.summary-context, .chart-hint, .range-feedback { color: var(--muted); font-size: 12px; }
+.summary-context { margin: 0 0 10px; }
+.chart-hint { margin: 0 0 14px; }
+.range-feedback:empty { display: none; }
 .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
 .metric, .chart { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; min-width: 0; }
 .metric-label { font-size: 12px; color: var(--muted); margin: 0 0 4px; }
@@ -40,8 +44,32 @@ button:focus-visible, select:focus-visible { outline: 3px solid var(--accent); o
 .chart svg { width: 100%; height: auto; display: block; overflow: visible; }
 .chart text { fill: var(--muted); font: 12px system-ui, sans-serif; }
 .chart line { stroke: var(--line); }
-.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; color: var(--muted); min-height: 20px; }
-.legend span::before { content: ""; display: inline-block; background: var(--series-color); width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+.legend { display: flex; flex-wrap: wrap; gap: 2px 6px; color: var(--muted); }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); background: transparent; border-color: transparent; min-height: 36px; padding: 4px 6px; }
+.legend-item::before { content: ""; background: var(--series-color); width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; }
+.legend-item[aria-pressed="false"] { opacity: .5; text-decoration: line-through; }
+.plot-hit { fill: transparent; cursor: crosshair; touch-action: pan-y; }
+.plot-selection { fill: var(--accent); fill-opacity: .16; stroke: var(--accent); stroke-width: 1; pointer-events: none; }
+.chart svg { user-select: none; }
+.chart-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+dialog { color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 24px; width: min(560px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); overflow-y: auto; box-shadow: 0 24px 80px #0003; }
+dialog::backdrop { background: #10182866; }
+.dialog-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
+.dialog-heading h2 { font-size: 22px; margin: 0; }
+.icon-button { display: grid; place-items: center; padding: 10px; border-color: transparent; }
+.icon-button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+.field-caption { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+.presets { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 24px; }
+.presets button { padding: 9px 6px; font-size: 14px; }
+.presets button[aria-pressed="true"] { color: var(--accent); background: var(--badge); border-color: var(--accent); }
+.date-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.date-fields label { display: block; font-size: 13px; margin-bottom: 6px; }
+.date-fields input { width: 100%; min-width: 0; max-width: 100%; }
+.field-hint { font-size: 12px; color: var(--muted); margin: 12px 0 0; }
+.range-error { color: var(--warn); font-size: 13px; margin: 12px 0 0; }
+.range-error:empty { display: none; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.primary-button { color: var(--card); background: var(--accent); border-color: var(--accent); }
 .footnote, footer { color: var(--muted); font-size: 12px; }
 .footnote { margin-top: 24px; }
 footer { margin-top: 32px; }
@@ -52,6 +80,10 @@ footer { margin-top: 32px; }
   .charts { grid-template-columns: 1fr; gap: 14px; }
   .metric, .chart { padding: 16px; }
   #updated { width: 100%; margin-left: 0; }
+  dialog { padding: 20px; }
+  .presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .date-fields { grid-template-columns: 1fr; }
+  .legend-item { min-height: 40px; }
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #111820; --card: #1b2530; --text: #eef2f6; --muted: #a7b2c2; --line: #344252; --accent: #66d9c1; --badge: #1e3b37; --warn: #ffc36d; }
