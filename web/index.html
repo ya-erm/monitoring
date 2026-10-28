@@ -21,11 +21,40 @@
       <section id="dashboard" hidden>
         <div class="toolbar">
           <div class="period-control"><span id="range-label">Период</span>
-            <button id="range" type="button" aria-haspopup="dialog" aria-controls="range-dialog"
-              aria-labelledby="range-label range-value">
+            <button id="range" type="button" aria-haspopup="dialog" aria-controls="range-popover"
+              aria-expanded="false" aria-labelledby="range-label range-value">
               <span id="range-value">6 часов</span>
               <svg class="range-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
             </button>
+            <div id="range-popover" class="range-popover" role="dialog" aria-modal="false"
+              aria-labelledby="range-heading" hidden>
+              <form id="range-form" novalidate>
+                <div class="popover-heading"><h2 id="range-heading">Выбор периода</h2>
+                  <button id="range-close" class="icon-button" type="button" aria-label="Закрыть">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
+                  </button>
+                </div>
+                <p class="field-caption">Последние</p>
+                <div class="presets" aria-label="Быстрый выбор периода">
+                  <button type="button" data-hours="1">1 час</button>
+                  <button type="button" data-hours="2">2 часа</button>
+                  <button type="button" data-hours="3">3 часа</button>
+                  <button type="button" data-hours="6">6 часов</button>
+                  <button type="button" data-hours="24">Сутки</button>
+                  <button type="button" data-hours="168">Неделя</button>
+                  <button type="button" data-hours="720">Месяц</button>
+                </div>
+                <div class="date-fields">
+                  <div><label for="range-from">От</label><input id="range-from" type="datetime-local" step="60" required></div>
+                  <div><label for="range-to">До</label><input id="range-to" type="datetime-local" step="60" required></div>
+                </div>
+                <p id="range-timezone" class="field-hint"></p>
+                <p class="field-hint">Месяц — последние 30 дней. Точный интервал — от минуты до 31 дня.</p>
+                <p id="range-error" class="range-error" role="alert"></p>
+                <div class="popover-actions"><button id="range-cancel" type="button">Отмена</button>
+                  <button class="primary-button" type="submit">Применить</button></div>
+              </form>
+            </div>
           </div>
           <button id="range-back" type="button" title="Вернуть предыдущий период" hidden>← Назад</button>
           <button id="refresh" type="button">Обновить</button>
@@ -39,34 +68,6 @@
         <section id="charts" class="charts" aria-label="История нагрузки"></section>
         <p class="footnote">Время показано в вашем часовом поясе. Разрывы — нет измерений.
           Для интервалов длиннее суток используются средние за 5 минут; пики CPU показаны отдельно.</p>
-        <dialog id="range-dialog" aria-labelledby="range-heading">
-          <form id="range-form" novalidate>
-            <div class="dialog-heading"><h2 id="range-heading">Выбор периода</h2>
-              <button id="range-close" class="icon-button" type="button" aria-label="Закрыть">
-                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
-              </button>
-            </div>
-            <p class="field-caption">Последние</p>
-            <div class="presets" aria-label="Быстрый выбор периода">
-              <button type="button" data-hours="1">1 час</button>
-              <button type="button" data-hours="2">2 часа</button>
-              <button type="button" data-hours="3">3 часа</button>
-              <button type="button" data-hours="6">6 часов</button>
-              <button type="button" data-hours="24">Сутки</button>
-              <button type="button" data-hours="168">Неделя</button>
-              <button type="button" data-hours="720">Месяц</button>
-            </div>
-            <div class="date-fields">
-              <div><label for="range-from">От</label><input id="range-from" type="datetime-local" step="60" required></div>
-              <div><label for="range-to">До</label><input id="range-to" type="datetime-local" step="60" required></div>
-            </div>
-            <p id="range-timezone" class="field-hint"></p>
-            <p class="field-hint">Месяц — последние 30 дней. Точный интервал — от минуты до 31 дня.</p>
-            <p id="range-error" class="range-error" role="alert"></p>
-            <div class="dialog-actions"><button id="range-cancel" type="button">Отмена</button>
-              <button class="primary-button" type="submit">Применить</button></div>
-          </form>
-        </dialog>
       </section>
       <footer>Только числовые метрики · без авторизации · история вне сервера</footer>
     </main>

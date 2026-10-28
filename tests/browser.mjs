@@ -55,10 +55,23 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
       `Horizontal overflow at ${width}px`);
     await page.locator("#range").click();
-    assert.equal(await page.locator("#range-dialog [data-hours]").count(), 7);
+    assert.equal(await page.locator("#range-popover [data-hours]").count(), 7);
     assert.match(await page.locator("#range-timezone").innerText(), /Europe\/Belgrade/);
-    assert.equal(await page.locator("#range-dialog").evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth), true);
+    assert.equal(await page.locator("#range-popover").evaluate((panel) => panel.scrollWidth <= panel.clientWidth), true);
+    const trigger = await page.locator("#range").boundingBox();
+    const panel = await page.locator("#range-popover").boundingBox();
+    assert.ok(Math.abs(panel.y - trigger.y - trigger.height - 8) < 1, "Picker is not anchored below the trigger");
+    assert.ok(panel.x >= 0 && panel.x + panel.width <= width && panel.y + panel.height <= 844);
+    assert.equal(await page.locator("#range").getAttribute("aria-expanded"), "true");
+    assert.equal(await page.locator(":modal").count(), 0);
     await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#range").evaluate((button) => document.activeElement === button), true);
+    await page.locator("#range").click();
+    await page.locator("#range").click();
+    assert.equal(await page.locator("#range-popover").isVisible(), false);
+    await page.locator("#range").click();
+    await page.locator("h1").click();
+    assert.equal(await page.locator("#range-popover").isVisible(), false);
   }
   for (const hours of [1, 2, 3, 6, 24, 168, 720]) await choosePeriod(hours);
   await choosePeriod(6);
@@ -76,13 +89,14 @@ try {
     });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator("#range").click();
-    await page.locator("#range-dialog").screenshot({
+    await page.locator("#range-popover").screenshot({
       path: process.env.MONITOR_SCREENSHOT.replace(/\.png$/, "-period.png"),
     });
     await page.keyboard.press("Escape");
   }
   await choosePeriod(720);
-  assert.equal(await page.locator(".legend button").count(), 13);
+  assert.equal(await page.locator(".legend button").count(), 11);
+  assert.equal(await page.getByRole("heading", { name: /Load average/ }).count(), 0);
   assert.equal(await page.locator("path[d*='NaN']").count(), 0);
   assert.deepEqual(external, [], "Demo made an external request");
 
@@ -112,10 +126,10 @@ try {
   assert.equal(await page.locator(".metric-value").nth(2).innerText(), "—");
   assert.equal(await page.locator(".chart svg").count(), 5);
   await choosePeriod(168);
-  assert.equal(await page.locator(".legend button").count(), 13);
+  assert.equal(await page.locator(".legend button").count(), 11);
   assert.ok(received.some((url) => url.includes("/days/")));
 
-  const memory = page.locator(".chart").filter({ hasText: "Память · %" });
+  const memory = page.locator('[data-chart="memory"]');
   await memory.getByRole("button", { name: "Swap", exact: true }).click();
   assert.equal(await memory.getByRole("button", { name: "Swap", exact: true }).getAttribute("aria-pressed"), "false");
   assert.equal(await memory.locator('path[data-series="Swap"]').getAttribute("display"), "none");
@@ -125,6 +139,34 @@ try {
   await memory.getByRole("button", { name: "RAM", exact: true }).click();
   assert.equal(await memory.locator('path[data-series="RAM"]').getAttribute("display"), "none");
   assert.equal(await memory.locator('path[data-series="Swap"]').getAttribute("display"), null);
+
+  const hoverAt = async (card, fraction) => {
+    await card.scrollIntoViewIfNeeded();
+    const plot = await card.locator(".plot-hit").boundingBox();
+    await page.mouse.move(plot.x + plot.width * fraction, plot.y + plot.height / 2);
+    return card.locator(".chart-tooltip").innerText();
+  };
+  // A known 2 GiB RAM / 64 GiB disk sample must retain its value when changing units.
+  await choosePeriod(1);
+  await memory.getByRole("button", { name: "RAM", exact: true }).click();
+  const beforeUnits = received.length;
+  const fixedWindow = await windowOf();
+  const fraction = (now - fixedWindow.start) / (fixedWindow.end - fixedWindow.start) - .0001;
+  assert.match(await hoverAt(memory, fraction), /RAM: 50 %/);
+  await memory.locator("select").selectOption("ГиБ");
+  assert.match(await hoverAt(memory, fraction), /RAM: 2 ГиБ/);
+  const disk = page.locator('[data-chart="disk"]');
+  assert.match(await hoverAt(disk, fraction), /Занято: 50 %/);
+  await disk.locator("select").selectOption("ГиБ");
+  assert.match(await hoverAt(disk, fraction), /Занято: 64 ГиБ/);
+  assert.match(await hoverAt(disk, .5), /Нет измерения/);
+  assert.equal(received.length, beforeUnits, "Changing units requested data again");
+  await memory.getByRole("button", { name: "Swap", exact: true }).click();
+  assert.doesNotMatch(await hoverAt(memory, fraction), /Swap:/);
+  await choosePeriod(2);
+  assert.equal(await memory.locator("select").inputValue(), "ГиБ");
+  assert.equal(await disk.locator("select").inputValue(), "ГиБ");
+  assert.equal(await memory.locator('path[data-series="Swap"]').getAttribute("display"), "none");
 
   // An exact local-time interval crossing UTC midnight must request both UTC dates.
   const previousDay = new Date((now - 2 * 86400) * 1000);
@@ -151,7 +193,7 @@ try {
   await page.locator("#range-from").fill(await localInput(customEnd));
   await page.locator("#range-to").fill(await localInput(customStart));
   await page.getByRole("button", { name: "Применить", exact: true }).click();
-  assert.equal(await page.locator("#range-dialog").evaluate((dialog) => dialog.open), true);
+  assert.equal(await page.locator("#range-popover").evaluate((panel) => !panel.hidden), true);
   assert.match(await page.locator("#range-error").innerText(), /позже/);
   await page.locator("#range-from").fill(await localInput(customEnd - 32 * 86400));
   await page.locator("#range-to").fill(await localInput(customEnd));
@@ -187,7 +229,7 @@ try {
   await page.waitForFunction(() => document.getElementById("status").textContent === "Ошибка чтения");
   assert.match(await page.locator("#notice").innerText(), /503/);
   assert.deepEqual(errors, []);
-  console.log("PASS: disabled/demo; mobile/desktop picker; 7 presets; exact local/UTC dates; validation; fixed refresh; reverse drag/undo; RAM/swap toggles; stale data; HTTP failure.");
+  console.log("PASS: disabled/demo; mobile/desktop dropdown; 7 presets; exact local/UTC dates; validation; fixed refresh; reverse drag/undo; RAM/swap toggles; disk history; percent/GiB values; hover values/gaps; stale data; HTTP failure.");
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));

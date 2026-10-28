@@ -12,6 +12,8 @@ let selecting = false;
 let selectedRange = { type: "relative", hours: 6 };
 const rangeHistory = [];
 const hiddenSeries = new Set();
+const chartUnits = { memory: "%", disk: "%" };
+let lastRender;
 const presets = new Map([[1, "1 час"], [2, "2 часа"], [3, "3 часа"], [6, "6 часов"],
   [24, "Сутки"], [168, "Неделя"], [720, "Месяц"]]);
 
@@ -59,7 +61,32 @@ function applyRange(next) {
   refresh();
 }
 
-function openRangeDialog() {
+function closeRangePicker(restoreFocus = true) {
+  byId("range-popover").hidden = true;
+  byId("range").setAttribute("aria-expanded", "false");
+  if (restoreFocus) byId("range").focus({ preventScroll: true });
+}
+
+function positionRangePicker() {
+  const panel = byId("range-popover");
+  if (panel.hidden) return;
+  const trigger = byId("range").getBoundingClientRect();
+  if (trigger.bottom <= 0 || trigger.top >= innerHeight) { closeRangePicker(false); return; }
+  const margin = 14, gap = 8;
+  const width = Math.min(560, innerWidth - margin * 2);
+  panel.style.width = `${width}px`;
+  panel.style.left = `${Math.max(margin, Math.min(trigger.left, innerWidth - width - margin))}px`;
+  const below = innerHeight - trigger.bottom - gap - margin;
+  const above = trigger.top - gap - margin;
+  const flip = below < Math.min(panel.scrollHeight, 240) && above > below;
+  const available = Math.max(0, flip ? above : below);
+  panel.style.maxHeight = `${available}px`;
+  const height = Math.min(panel.scrollHeight + 2, available);
+  panel.style.top = `${flip ? trigger.top - gap - height : trigger.bottom + gap}px`;
+}
+
+function openRangePicker() {
+  if (!byId("range-popover").hidden) { closeRangePicker(); return; }
   const { start, end } = rangeWindow();
   byId("range-from").value = localDateTime(start);
   byId("range-to").value = localDateTime(end);
@@ -70,7 +97,10 @@ function openRangeDialog() {
     button.setAttribute("aria-pressed", String(selectedRange.type === "relative"
       && selectedRange.hours === Number(button.dataset.hours)));
   }
-  byId("range-dialog").showModal();
+  byId("range-popover").hidden = false;
+  byId("range").setAttribute("aria-expanded", "true");
+  positionRangePicker();
+  byId("range-popover").querySelector('[data-hours][aria-pressed="true"]')?.focus({ preventScroll: true });
 }
 
 function applyDateFields(event) {
@@ -85,7 +115,7 @@ function applyDateFields(event) {
   else if (end > Math.floor(Date.now() / 1000)) error = "Конец интервала не может быть в будущем.";
   byId("range-error").textContent = error;
   if (error) return;
-  byId("range-dialog").close();
+  closeRangePicker();
   applyRange({ type: "absolute", start, end });
 }
 
@@ -164,6 +194,12 @@ const memoryPct = (s) => s.mem_total_bytes > 0 && Number.isFinite(s.mem_availabl
   ? (1 - s.mem_available_bytes / s.mem_total_bytes) * 100 : null;
 const swapPct = (s) => s.swap_total_bytes > 0 && Number.isFinite(s.swap_used_bytes)
   ? s.swap_used_bytes / s.swap_total_bytes * 100 : 0;
+const memoryUsed = (s) => Number.isFinite(s.mem_total_bytes) && Number.isFinite(s.mem_available_bytes)
+  ? s.mem_total_bytes - s.mem_available_bytes : null;
+const diskUsed = (s) => Number.isFinite(s.disk_total_bytes) && Number.isFinite(s.disk_available_bytes)
+  ? s.disk_total_bytes - s.disk_available_bytes : null;
+const diskPct = (s) => s.disk_total_bytes > 0 && diskUsed(s) !== null
+  ? diskUsed(s) / s.disk_total_bytes * 100 : null;
 
 function setStatus(text, warning = false) {
   byId("status").textContent = text;
@@ -190,9 +226,29 @@ function summary(sample) {
   }
 }
 
-function drawChart(title, series, rows, start, end, resolution, fixedMax, format) {
+function drawChart(title, series, rows, start, end, resolution, fixedMax, format, options = {}) {
   const card = element("article", "chart");
-  card.append(element("h2", "", title));
+  const keyPrefix = options.id || title;
+  card.dataset.chart = keyPrefix;
+  const heading = element("div", "chart-heading");
+  heading.append(element("h2", "", title));
+  if (options.id) {
+    const units = element("select", "chart-unit");
+    units.setAttribute("aria-label", `Единицы: ${title}`);
+    for (const unit of ["%", "ГиБ"]) {
+      const option = element("option", "", unit);
+      option.value = unit;
+      units.append(option);
+    }
+    units.value = chartUnits[options.id];
+    units.addEventListener("change", () => {
+      chartUnits[options.id] = units.value;
+      render(...lastRender);
+      document.querySelector(`[data-chart="${options.id}"] select`).focus({ preventScroll: true });
+    });
+    heading.append(units);
+  }
+  card.append(heading);
   const svg = svgNode("svg", { viewBox: "0 0 600 230", role: "img", "aria-label": title,
     "aria-describedby": "chart-range-help", "data-start": start, "data-end": end,
     "data-resolution": resolution });
@@ -228,19 +284,63 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
       "stroke-width": 2, "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke",
       "data-series": line.label,
       ...(line.dashed ? { "stroke-dasharray": "4 4" } : {}) });
-    if (hiddenSeries.has(`${title}:${line.label}`)) stroke.setAttribute("display", "none");
+    if (hiddenSeries.has(`${keyPrefix}:${line.label}`)) stroke.setAttribute("display", "none");
     paths.push(stroke);
     svg.append(stroke);
   });
   enableChartSelection(svg, left, right, top, bottom, start, end);
+  const cursor = svgNode("line", { y1: top, y2: bottom, class: "plot-cursor", display: "none" });
+  svg.append(cursor);
+  const tooltip = element("div", "chart-tooltip");
+  tooltip.hidden = true;
+  const hideTooltip = () => { tooltip.hidden = true; cursor.setAttribute("display", "none"); };
+  svg.addEventListener("pointerdown", hideTooltip);
+  svg.addEventListener("pointerleave", hideTooltip);
+  svg.addEventListener("pointermove", (event) => {
+    if (selecting || event.buttons || !rows.length) { hideTooltip(); return; }
+    const point = svg.createSVGPoint();
+    point.x = event.clientX; point.y = event.clientY;
+    const position = point.matrixTransform(svg.getScreenCTM().inverse());
+    if (position.x < left || position.x > right || position.y < top || position.y > bottom) {
+      hideTooltip(); return;
+    }
+    const ts = start + (position.x - left) / (right - left) * (end - start);
+    let lo = 0, hi = rows.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (rows[mid].ts < ts) lo = mid + 1;
+      else hi = mid;
+    }
+    const row = [rows[lo - 1], rows[lo]].filter(Boolean)
+      .sort((a, b) => Math.abs(a.ts - ts) - Math.abs(b.ts - ts))[0];
+    const known = Math.abs(row.ts - ts) <= resolution * .9;
+    const at = known ? row.ts : ts;
+    cursor.setAttribute("x1", x(at)); cursor.setAttribute("x2", x(at));
+    cursor.removeAttribute("display");
+    tooltip.replaceChildren(element("div", "tooltip-time", new Date(at * 1000).toLocaleString("ru-RU")));
+    const visible = series.filter((line) => !hiddenSeries.has(`${keyPrefix}:${line.label}`));
+    if (!known) tooltip.append(element("div", "", "Нет измерения"));
+    else if (!visible.length) tooltip.append(element("div", "", "Все линии скрыты"));
+    else for (const line of visible) {
+      const value = line.value(row);
+      const text = Number.isFinite(value) ? `${number(value, 2)} ${options.unit || ""}`.trim() : "—";
+      tooltip.append(element("div", "", `${line.label}: ${text}`));
+    }
+    tooltip.hidden = false;
+    const bounds = card.getBoundingClientRect();
+    tooltip.style.left = `${Math.max(8, Math.min(event.clientX - bounds.left + 12,
+      bounds.width - tooltip.offsetWidth - 8))}px`;
+    tooltip.style.top = `${Math.max(8, event.clientY - bounds.top - tooltip.offsetHeight - 12)}px`;
+  });
   const legend = element("div", "legend");
   series.forEach((line, index) => {
-    const key = `${title}:${line.label}`;
+    const key = `${keyPrefix}:${line.label}`;
     const item = element("button", "legend-item", line.label);
     item.type = "button";
     item.setAttribute("aria-pressed", String(!hiddenSeries.has(key)));
     item.style.setProperty("--series-color", palette[index]);
     item.addEventListener("click", () => {
+      hideTooltip();
       if (hiddenSeries.has(key)) hiddenSeries.delete(key);
       else hiddenSeries.add(key);
       const visible = !hiddenSeries.has(key);
@@ -250,26 +350,33 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
     });
     legend.append(item);
   });
-  card.append(svg, legend);
-  if (title === "Load average") card.append(element("p", "chart-note",
-    "Среднее число задач на CPU, в очереди к CPU и в непрерываемом ожидании I/O."));
+  card.append(svg, legend, tooltip);
   byId("charts").append(card);
 }
 
 function render(rows, start, end, resolution) {
+  lastRender = [rows, start, end, resolution];
   byId("charts").replaceChildren();
   const field = (label, key, scale = 1) => ({ label,
     value: (s) => Number.isFinite(s[key]) ? s[key] / scale : null });
   const cpu = [field("Вычисления", "cpu_busy_pct"), field("I/O wait", "cpu_iowait_pct"),
     field("Steal", "cpu_steal_pct")];
   if (resolution === 300) cpu.push({ ...field("Пик вычислений", "cpu_peak_pct"), dashed: true });
-  const chart = (title, series, max = null, format = (v) => number(v)) =>
-    drawChart(title, series, rows, start, end, resolution, max, format);
-  chart("CPU · %", cpu, 100, (v) => number(v, 0));
-  chart("Память · %", [{ label: "RAM", value: memoryPct }, { label: "Swap", value: swapPct }], 100, (v) => number(v, 0));
-  chart("Сеть · МиБ/с", [field("Входящий", "net_rx_bytes_s", 2 ** 20), field("Исходящий", "net_tx_bytes_s", 2 ** 20)]);
-  chart("Load average", [field("1 минута", "load1"), field("5 минут", "load5"), field("15 минут", "load15")]);
-  chart("Дисковый I/O · МиБ/с", [field("Чтение", "disk_read_bytes_s", 2 ** 20), field("Запись", "disk_write_bytes_s", 2 ** 20)]);
+  const chart = (title, series, max = null, options = {}) =>
+    drawChart(title, series, rows, start, end, resolution, max, (v) => number(v), options);
+  chart("CPU · %", cpu, 100, { unit: "%" });
+  const inGiB = (value) => Number.isFinite(value) ? value / 2 ** 30 : null;
+  const capacity = (keys) => Math.max(1, ...rows.flatMap((s) => keys.map((key) => inGiB(s[key]))).filter(Number.isFinite));
+  const memoryPercent = chartUnits.memory === "%", diskPercent = chartUnits.disk === "%";
+  chart("Память", memoryPercent
+    ? [{ label: "RAM", value: memoryPct }, { label: "Swap", value: swapPct }]
+    : [{ label: "RAM", value: (s) => inGiB(memoryUsed(s)) }, field("Swap", "swap_used_bytes", 2 ** 30)],
+    memoryPercent ? 100 : capacity(["mem_total_bytes", "swap_total_bytes"]),
+    { id: "memory", unit: chartUnits.memory });
+  chart("Место на диске", [{ label: "Занято", value: diskPercent ? diskPct : (s) => inGiB(diskUsed(s)) }],
+    diskPercent ? 100 : capacity(["disk_total_bytes"]), { id: "disk", unit: chartUnits.disk });
+  chart("Сеть · МиБ/с", [field("Входящий", "net_rx_bytes_s", 2 ** 20), field("Исходящий", "net_tx_bytes_s", 2 ** 20)], null, { unit: "МиБ/с" });
+  chart("Дисковый I/O · МиБ/с", [field("Чтение", "disk_read_bytes_s", 2 ** 20), field("Запись", "disk_write_bytes_s", 2 ** 20)], null, { unit: "МиБ/с" });
 }
 
 function demoData(start, end, resolution) {
@@ -398,19 +505,26 @@ byId("title").textContent = config.title || "Сервер";
 if (demo || config.enabled === true) {
   byId("dashboard").hidden = false;
   updateRangeLabel();
-  byId("range").addEventListener("click", openRangeDialog);
+  byId("range").addEventListener("click", openRangePicker);
   byId("range-form").addEventListener("submit", applyDateFields);
   for (const id of ["range-close", "range-cancel"]) {
-    byId(id).addEventListener("click", () => byId("range-dialog").close());
+    byId(id).addEventListener("click", () => closeRangePicker());
   }
-  byId("range-dialog").addEventListener("click", (event) => {
-    const rect = byId("range-dialog").getBoundingClientRect();
-    if (event.target === byId("range-dialog") && (event.clientX < rect.left || event.clientX > rect.right
-        || event.clientY < rect.top || event.clientY > rect.bottom)) byId("range-dialog").close();
+  document.addEventListener("pointerdown", (event) => {
+    if (!byId("range-popover").hidden && !byId("range-popover").contains(event.target)
+        && !byId("range").contains(event.target)) closeRangePicker(false);
   });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !event.defaultPrevented && !byId("range-popover").hidden) {
+      event.preventDefault();
+      closeRangePicker();
+    }
+  });
+  window.addEventListener("resize", positionRangePicker);
+  window.addEventListener("scroll", positionRangePicker, true);
   for (const button of document.querySelectorAll("[data-hours]")) {
     button.addEventListener("click", () => {
-      byId("range-dialog").close();
+      closeRangePicker();
       applyRange({ type: "relative", hours: Number(button.dataset.hours) });
     });
   }
@@ -429,7 +543,7 @@ if (demo || config.enabled === true) {
   byId("refresh").addEventListener("click", () => { cache.clear(); refresh(); });
   refresh();
   setInterval(() => {
-    if (!document.hidden && !busy && !selecting && !byId("range-dialog").open) refresh();
+    if (!document.hidden && !busy && !selecting && byId("range-popover").hidden) refresh();
   }, Math.max(30, config.refreshSeconds || 60) * 1000);
 } else {
   byId("notice").textContent = "Мониторинг выключен. Запросы к S3 не выполняются. Для локального предпросмотра добавьте ?demo=1 к адресу страницы.";
