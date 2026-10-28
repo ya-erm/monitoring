@@ -296,10 +296,8 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
   svg.append(cursor);
   const tooltip = element("div", "chart-tooltip");
   const tooltipTime = element("div", "tooltip-time");
-  const tooltipDetail = element("div", "tooltip-detail", resolution >= 60
-    ? `Среднее за ${number(resolution / 60)} мин` : `Шаг измерений ${resolution} с`);
   const tooltipValues = element("div", "tooltip-values");
-  tooltip.append(tooltipTime, tooltipDetail, tooltipValues);
+  tooltip.append(tooltipTime, tooltipValues);
   const hideTooltip = () => {
     tooltip.hidden = true;
     cursor.setAttribute("display", "none");
@@ -339,7 +337,9 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
     else for (const line of visible) {
       const value = line.value(row);
       const text = Number.isFinite(value) ? `${number(value, 2)} ${options.unit || ""}`.trim() : "—";
-      tooltipValues.append(element("div", "", `${line.label}: ${text}`));
+      const item = element("div", "tooltip-series", `${line.label}: ${text}`);
+      item.style.setProperty("--series-color", palette[series.indexOf(line)]);
+      tooltipValues.append(item);
     }
     tooltip.hidden = false;
     const margin = 14, gap = 18;
