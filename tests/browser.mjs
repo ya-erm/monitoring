@@ -50,6 +50,20 @@ try {
   await page.goto(`${base}/?demo=1`);
   await page.waitForFunction(() => document.querySelectorAll(".chart svg").length === 5);
   assert.match(await page.locator("#status").innerText(), /Демо/);
+  assert.equal(await page.locator(".chart svg").first().getAttribute("data-resolution"), "60");
+  assert.equal(await page.locator('path[data-series="Пик вычислений"]').count(), 1);
+  const averaged = await page.evaluate(() => aggregateForChart([
+    { ts: 120, interval_s: 15, cpu_busy_pct: 20, net_rx_bytes_s: null },
+    { ts: 135, interval_s: 5, cpu_busy_pct: 100, net_rx_bytes_s: null },
+    { ts: 165, interval_s: 15, cpu_busy_pct: 40, net_rx_bytes_s: null },
+    { ts: 180, interval_s: 15, cpu_busy_pct: 60, net_rx_bytes_s: null },
+  ], 15, 60));
+  assert.equal(averaged.length, 3, "A missing interval inside a minute was merged");
+  assert.equal(averaged[0].cpu_busy_pct, 40, "Average did not respect measurement duration");
+  assert.equal(averaged[0].cpu_peak_pct, 100, "CPU peak was lost");
+  assert.equal(averaged[0].net_rx_bytes_s, null, "Unknown metric became zero");
+  assert.notEqual(averaged[0].segment, averaged[1].segment, "Gap was joined");
+  assert.equal(averaged[1].segment, averaged[2].segment, "Contiguous data was split");
   for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
@@ -74,6 +88,9 @@ try {
     assert.equal(await page.locator("#range-popover").isVisible(), false);
   }
   for (const hours of [1, 2, 3, 6, 24, 168, 720]) await choosePeriod(hours);
+  await choosePeriod(1);
+  assert.equal(await page.locator(".chart svg").first().getAttribute("data-resolution"), "15");
+  assert.equal(await page.locator('path[data-series="Пик вычислений"]').count(), 0);
   await choosePeriod(6);
   if (process.env.MONITOR_SCREENSHOT) {
     await page.setViewportSize({ width: 390, height: 844 });

@@ -246,7 +246,9 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
       render(...lastRender);
       document.querySelector(`[data-chart="${options.id}"] select`).focus({ preventScroll: true });
     });
-    heading.append(units);
+    const control = element("span", "unit-control");
+    control.append(units);
+    heading.append(control);
   }
   card.append(heading);
   const svg = svgNode("svg", { viewBox: "0 0 600 230", role: "img", "aria-label": title,
@@ -276,12 +278,13 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
     for (const row of rows) {
       const value = line.value(row);
       if (!Number.isFinite(value)) { previous = null; continue; }
-      const joined = previous !== null && row.ts - previous <= resolution * 1.8;
+      const joined = previous !== null && row.ts - previous.ts <= resolution * 1.8
+        && row.segment === previous.segment;
       path += `${joined ? "L" : "M"}${x(row.ts).toFixed(2)},${y(value).toFixed(2)} `;
-      previous = row.ts;
+      previous = row;
     }
     const stroke = svgNode("path", { d: path, fill: "none", stroke: palette[index],
-      "stroke-width": 2, "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke",
+      "stroke-width": line.dashed ? 1.2 : 1.5, "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke",
       "data-series": line.label,
       ...(line.dashed ? { "stroke-dasharray": "4 4" } : {}) });
     if (hiddenSeries.has(`${keyPrefix}:${line.label}`)) stroke.setAttribute("display", "none");
@@ -311,13 +314,19 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
       if (rows[mid].ts < ts) lo = mid + 1;
       else hi = mid;
     }
-    const row = [rows[lo - 1], rows[lo]].filter(Boolean)
-      .sort((a, b) => Math.abs(a.ts - ts) - Math.abs(b.ts - ts))[0];
-    const known = Math.abs(row.ts - ts) <= resolution * .9;
+    const nearby = [rows[lo - 1], rows[lo]].filter(Boolean)
+      .sort((a, b) => Math.abs(a.ts - ts) - Math.abs(b.ts - ts));
+    const covers = (row) => ts >= (row.coverageStart ?? row.ts - resolution * .9)
+      && ts <= (row.coverageEnd ?? row.ts + resolution * .9);
+    const row = nearby.find(covers) || nearby[0];
+    const known = covers(row);
     const at = known ? row.ts : ts;
     cursor.setAttribute("x1", x(at)); cursor.setAttribute("x2", x(at));
     cursor.removeAttribute("display");
     tooltip.replaceChildren(element("div", "tooltip-time", new Date(at * 1000).toLocaleString("ru-RU")));
+    if (row.coverageStart !== undefined || resolution === 300) {
+      tooltip.append(element("div", "tooltip-detail", `Среднее за ${number(resolution / 60)} мин`));
+    }
     const visible = series.filter((line) => !hiddenSeries.has(`${keyPrefix}:${line.label}`));
     if (!known) tooltip.append(element("div", "", "Нет измерения"));
     else if (!visible.length) tooltip.append(element("div", "", "Все линии скрыты"));
@@ -354,14 +363,50 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
   byId("charts").append(card);
 }
 
+function aggregateForChart(rows, sourceResolution, resolution) {
+  const groups = [];
+  let previous = null, segment = 0;
+  for (const row of rows) {
+    if (previous && row.ts - previous.ts > sourceResolution * 1.8) segment++;
+    const bucket = Math.floor(row.ts / resolution);
+    let group = groups.at(-1);
+    if (!group || group.bucket !== bucket || group.segment !== segment) {
+      group = { bucket, segment, rows: [] };
+      groups.push(group);
+    }
+    group.rows.push(row);
+    previous = row;
+  }
+  return groups.map(({ segment, rows: samples }) => {
+    const average = (key) => {
+      const known = samples.filter((s) => Number.isFinite(s[key]));
+      const weight = (s) => Math.min(sourceResolution, s.interval_s || sourceResolution);
+      const total = known.reduce((sum, s) => sum + weight(s), 0);
+      return total ? known.reduce((sum, s) => sum + s[key] * weight(s), 0) / total : null;
+    };
+    const result = Object.fromEntries(Object.keys(samples[0]).map((key) => [key, average(key)]));
+    const cpus = samples.map((s) => s.cpu_busy_pct).filter(Number.isFinite);
+    return { ...result, segment, cpu_peak_pct: cpus.length ? Math.max(...cpus) : null,
+      coverageStart: samples[0].ts - sourceResolution * .9,
+      coverageEnd: samples.at(-1).ts + sourceResolution * .9 };
+  });
+}
+
 function render(rows, start, end, resolution) {
   lastRender = [rows, start, end, resolution];
+  const displayResolution = resolution < 300 && end - start > 3 * 3600
+    ? Math.max(resolution, Math.ceil((end - start) / 360 / 60) * 60) : resolution;
+  if (displayResolution > resolution) rows = aggregateForChart(rows, resolution, displayResolution);
+  resolution = displayResolution;
+  byId("chart-detail").textContent = resolution >= 60
+    ? `Средние за ${number(resolution / 60)} мин; пики CPU показаны отдельно. При приближении детализация увеличивается.`
+    : `Исходные измерения с шагом ${resolution} с.`;
   byId("charts").replaceChildren();
   const field = (label, key, scale = 1) => ({ label,
     value: (s) => Number.isFinite(s[key]) ? s[key] / scale : null });
   const cpu = [field("Вычисления", "cpu_busy_pct"), field("I/O wait", "cpu_iowait_pct"),
     field("Steal", "cpu_steal_pct")];
-  if (resolution === 300) cpu.push({ ...field("Пик вычислений", "cpu_peak_pct"), dashed: true });
+  if (resolution >= 60) cpu.push({ ...field("Пик вычислений", "cpu_peak_pct"), dashed: true });
   const chart = (title, series, max = null, options = {}) =>
     drawChart(title, series, rows, start, end, resolution, max, (v) => number(v), options);
   chart("CPU · %", cpu, 100, { unit: "%" });
