@@ -21,6 +21,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Generate public dashboard configuration
+        env:
+          MONITORING_DATA_URL: ${{ vars.MONITORING_DATA_URL }}
+          MONITORING_TITLE: ${{ vars.MONITORING_TITLE }}
+        run: python3 deploy/render_config.py
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

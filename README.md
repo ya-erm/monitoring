@@ -153,8 +153,12 @@ python3 -m http.server 8090 --bind 127.0.0.1 --directory web
    ручные команды нужно запускать от `monitoring` с
    `MONITOR_STATE_DIR=/var/lib/server-monitoring`, чтобы использовать ту же базу.
 9. Затем `systemctl enable --now monitoring-collector.service monitoring-upload.timer`.
-10. В `web/config.js` указать публичный HTTPS URL prefix и `enabled: true`.
+10. В настройках GitHub-репозитория открыть Settings → Secrets and variables →
+    Actions → Variables. Добавить `MONITORING_DATA_URL` — публичный HTTPS URL prefix,
+    и, при необходимости, `MONITORING_TITLE` — подпись сервера.
     В GitHub Pages выбрать GitHub Actions и вручную запустить workflow.
+    Он создаст публичный `config.js` из этих переменных; без URL страница выключена.
+    Исходный `web/config.js` остаётся общим и подходит для локального демо.
     В артефакт Pages попадает **только `web/`**, не исходники, `.env` или база.
 
 Для выключения: `MONITOR_ENABLED=false` предотвращает запуск новых команд.
@@ -165,8 +169,10 @@ sudo systemctl stop monitoring-collector.service monitoring-upload.timer monitor
 sudo systemctl disable monitoring-collector.service monitoring-upload.timer
 ```
 
-Поставить `enabled: false` в конфигурации страницы и опубликовать её, если нужно
-также остановить чтение S3 из браузера. Сохранённая публичная история сама не исчезает.
+Удалить переменную репозитория `MONITORING_DATA_URL` и опубликовать страницу, если
+нужно также остановить чтение S3 из браузера. При самостоятельном хостинге вместо
+workflow можно изменить `enabled` в `web/config.js`. Сохранённая публичная история
+сама не исчезает.
 
 ## Локальные файлы и секреты
 
