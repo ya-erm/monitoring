@@ -1,0 +1,11 @@
+[Unit]
+Description=Publish monitoring data once per minute (manual opt-in)
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+RandomizedDelaySec=5
+Persistent=false
+Unit=monitoring-upload.service
+
+[Install]
+WantedBy=timers.target

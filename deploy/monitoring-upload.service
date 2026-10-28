@@ -1,0 +1,25 @@
+[Unit]
+Description=Publish opt-in numeric metrics to S3
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/monitoring/.env
+
+[Service]
+Type=oneshot
+User=monitoring
+Group=monitoring
+WorkingDirectory=/opt/monitoring
+Environment=MONITOR_STATE_DIR=/var/lib/server-monitoring
+ExecStart=/opt/monitoring/.venv/bin/python -m agent --env-file /opt/monitoring/.env upload
+StateDirectory=server-monitoring
+StateDirectoryMode=0700
+UMask=0077
+Nice=10
+CPUQuota=10%
+MemoryMax=160M
+TimeoutStartSec=50
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

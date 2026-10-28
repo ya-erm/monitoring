@@ -1,0 +1,28 @@
+[Unit]
+Description=Opt-in Linux public metrics collector
+After=local-fs.target
+ConditionPathExists=/opt/monitoring/.env
+
+[Service]
+Type=simple
+User=monitoring
+Group=monitoring
+WorkingDirectory=/opt/monitoring
+Environment=MONITOR_STATE_DIR=/var/lib/server-monitoring
+ExecStart=/usr/bin/python3 -m agent --env-file /opt/monitoring/.env run
+Restart=on-failure
+RestartSec=15
+StateDirectory=server-monitoring
+StateDirectoryMode=0700
+UMask=0077
+Nice=10
+CPUQuota=2%
+MemoryMax=64M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="referrer" content="no-referrer">
+    <title>Мониторинг сервера</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="style.css">
+    <script src="config.js" defer></script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div><p class="eyebrow">МОНИТОРИНГ</p><h1 id="title">Сервер</h1></div>
+        <span id="status" role="status" class="badge">Выключено</span>
+      </header>
+      <p id="notice" class="notice" aria-live="polite"></p>
+      <section id="dashboard" hidden>
+        <div class="toolbar">
+          <label for="range">Период <span class="select-field"><select id="range">
+            <option value="1">Час</option><option value="6" selected>6 часов</option>
+            <option value="24">Сутки</option><option value="168">Неделя</option>
+            <option value="720">30 дней</option>
+          </select><svg class="select-arrow" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="m4 6 4 4 4-4" />
+          </svg></span></label>
+          <button id="refresh" type="button">Обновить</button>
+          <span id="updated"></span>
+        </div>
+        <section id="summary" class="summary" aria-label="Последние показатели"></section>
+        <section id="charts" class="charts" aria-label="История нагрузки"></section>
+        <p class="footnote">Время показано в вашем часовом поясе. Разрывы — нет измерений.
+          Для недели и месяца используются средние за 5 минут; пики CPU показаны отдельно.</p>
+      </section>
+      <footer>Только числовые метрики · без авторизации · история вне сервера</footer>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-monitoring-history",
+      "Status": "Enabled",
+      "Filter": {"Prefix": "monitoring/server-1/"},
+      "Expiration": {"Days": 31},
+      "NoncurrentVersionExpiration": {"NoncurrentDays": 1},
+      "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}
+    }
+  ]
+}
