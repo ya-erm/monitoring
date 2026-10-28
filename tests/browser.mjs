@@ -68,16 +68,33 @@ try {
     await page.setViewportSize({ width, height: 844 });
     const cpu = page.locator(".chart").first();
     await cpu.scrollIntoViewIfNeeded();
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const before = await cpu.boundingBox();
     const plot = await cpu.locator(".plot-hit").boundingBox();
-    await page.mouse.move(plot.x + plot.width * .3, plot.y + plot.height / 2);
-    assert.match(await cpu.locator(".chart-tooltip").innerText(), /Вычисления: [\d\s,.]+ %/);
-    assert.deepEqual(await cpu.boundingBox(), before, `Hover moved the chart at ${width}px`);
-    const graph = await cpu.locator("svg").boundingBox();
-    const values = await cpu.locator(".chart-tooltip").boundingBox();
-    assert.ok(values.y >= graph.y + graph.height, `Values overlap the graph at ${width}px`);
+    const positions = [];
+    for (const [fx, fy] of [[.02, .05], [.3, .5], [.5, .95], [.98, .05]]) {
+      const point = { x: plot.x + plot.width * fx, y: plot.y + plot.height * fy };
+      await page.mouse.move(point.x, point.y);
+      assert.match(await cpu.locator(".chart-tooltip").innerText(), /Вычисления: [\d\s,.]+ %/);
+      assert.deepEqual(await cpu.boundingBox(), before, `Hover moved the chart at ${width}px`);
+      const values = await cpu.locator(".chart-tooltip").boundingBox();
+      assert.ok(values, `Tooltip is hidden at ${width}px, point ${fx}/${fy}`);
+      assert.ok(values.x >= 14 && values.x + values.width <= width - 13
+        && values.y >= 14 && values.y + values.height <= 831, `Tooltip left the viewport at ${width}px`);
+      assert.ok(point.x < values.x || point.x > values.x + values.width
+        || point.y < values.y || point.y > values.y + values.height, `Tooltip covers the pointer at ${width}px`);
+      positions.push(values);
+    }
+    assert.notDeepEqual(positions[0], positions.at(-1), "Tooltip did not move");
+    if (width === 1440) {
+      assert.ok(positions[0].x > plot.x + plot.width * .02, "Tooltip did not open to the right");
+      assert.ok(positions.at(-1).x + positions.at(-1).width < plot.x + plot.width * .98,
+        "Tooltip did not switch to the left");
+    }
     assert.equal(await cpu.locator("svg title").count(), 0, "Native hover tooltip remains");
     assert.equal(await cpu.locator(".chart-tooltip").evaluate((node) => node.scrollHeight <= node.clientHeight), true);
+    await page.mouse.move(0, 0);
+    assert.equal(await cpu.locator(".chart-tooltip").isVisible(), false);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
       `Horizontal overflow at ${width}px`);
     await page.locator("#range").click();
@@ -171,6 +188,7 @@ try {
 
   const hoverAt = async (card, fraction) => {
     await card.scrollIntoViewIfNeeded();
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const plot = await card.locator(".plot-hit").boundingBox();
     await page.mouse.move(plot.x + plot.width * fraction, plot.y + plot.height / 2);
     return card.locator(".chart-tooltip").innerText();

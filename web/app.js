@@ -295,15 +295,13 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
   const cursor = svgNode("line", { y1: top, y2: bottom, class: "plot-cursor", display: "none" });
   svg.append(cursor);
   const tooltip = element("div", "chart-tooltip");
-  tooltip.style.setProperty("--tooltip-rows", Math.ceil(series.length / 2));
   const tooltipTime = element("div", "tooltip-time");
   const tooltipDetail = element("div", "tooltip-detail", resolution >= 60
     ? `Среднее за ${number(resolution / 60)} мин` : `Шаг измерений ${resolution} с`);
   const tooltipValues = element("div", "tooltip-values");
   tooltip.append(tooltipTime, tooltipDetail, tooltipValues);
   const hideTooltip = () => {
-    tooltipTime.textContent = "Значения при наведении на график";
-    tooltipValues.replaceChildren();
+    tooltip.hidden = true;
     cursor.setAttribute("display", "none");
   };
   hideTooltip();
@@ -343,6 +341,31 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
       const text = Number.isFinite(value) ? `${number(value, 2)} ${options.unit || ""}`.trim() : "—";
       tooltipValues.append(element("div", "", `${line.label}: ${text}`));
     }
+    tooltip.hidden = false;
+    const margin = 14, gap = 18;
+    const width = tooltip.offsetWidth, height = tooltip.offsetHeight;
+    // Keep the selected time column clear; use vertical placement on narrow screens.
+    const anchor = svg.createSVGPoint();
+    anchor.x = x(at); anchor.y = position.y;
+    const selected = anchor.matrixTransform(svg.getScreenCTM());
+    const anchorLeft = Math.min(selected.x, event.clientX);
+    const anchorRight = Math.max(selected.x, event.clientX);
+    const roomLeft = anchorLeft - margin - gap;
+    const roomRight = innerWidth - margin - anchorRight - gap;
+    let tooltipX, tooltipY;
+    if (width <= Math.max(roomLeft, roomRight)) {
+      const preferLeft = position.x > (left + right) / 2;
+      const useLeft = preferLeft ? width <= roomLeft : width > roomRight;
+      tooltipX = useLeft ? anchorLeft - gap - width : anchorRight + gap;
+      tooltipY = event.clientY - height / 2;
+    } else {
+      tooltipX = event.clientX - width / 2;
+      const roomAbove = event.clientY - margin - gap;
+      const roomBelow = innerHeight - margin - event.clientY - gap;
+      tooltipY = roomAbove > roomBelow ? event.clientY - gap - height : event.clientY + gap;
+    }
+    tooltip.style.left = `${Math.max(margin, Math.min(tooltipX, innerWidth - width - margin))}px`;
+    tooltip.style.top = `${Math.max(margin, Math.min(tooltipY, innerHeight - height - margin))}px`;
   });
   const legend = element("div", "legend");
   series.forEach((line, index) => {
@@ -550,6 +573,12 @@ async function refresh() {
 }
 
 byId("title").textContent = config.title || "Сервер";
+const hideChartTooltips = () => {
+  for (const tooltip of document.querySelectorAll(".chart-tooltip")) tooltip.hidden = true;
+  for (const cursor of document.querySelectorAll(".plot-cursor")) cursor.setAttribute("display", "none");
+};
+window.addEventListener("scroll", hideChartTooltips, true);
+window.addEventListener("resize", hideChartTooltips);
 if (demo || config.enabled === true) {
   byId("dashboard").hidden = false;
   updateRangeLabel();
