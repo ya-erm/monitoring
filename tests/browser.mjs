@@ -66,6 +66,18 @@ try {
   assert.equal(averaged[1].segment, averaged[2].segment, "Contiguous data was split");
   for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 844 });
+    const cpu = page.locator(".chart").first();
+    await cpu.scrollIntoViewIfNeeded();
+    const before = await cpu.boundingBox();
+    const plot = await cpu.locator(".plot-hit").boundingBox();
+    await page.mouse.move(plot.x + plot.width * .3, plot.y + plot.height / 2);
+    assert.match(await cpu.locator(".chart-tooltip").innerText(), /Вычисления: [\d\s,.]+ %/);
+    assert.deepEqual(await cpu.boundingBox(), before, `Hover moved the chart at ${width}px`);
+    const graph = await cpu.locator("svg").boundingBox();
+    const values = await cpu.locator(".chart-tooltip").boundingBox();
+    assert.ok(values.y >= graph.y + graph.height, `Values overlap the graph at ${width}px`);
+    assert.equal(await cpu.locator("svg title").count(), 0, "Native hover tooltip remains");
+    assert.equal(await cpu.locator(".chart-tooltip").evaluate((node) => node.scrollHeight <= node.clientHeight), true);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
       `Horizontal overflow at ${width}px`);
     await page.locator("#range").click();

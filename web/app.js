@@ -254,7 +254,7 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
   const svg = svgNode("svg", { viewBox: "0 0 600 230", role: "img", "aria-label": title,
     "aria-describedby": "chart-range-help", "data-start": start, "data-end": end,
     "data-resolution": resolution });
-  svg.append(svgNode("title", {}, `${title}. ${rows.length} измерений; пропуски показаны разрывами.`));
+  svg.setAttribute("aria-label", `${title}. ${rows.length} измерений; пропуски показаны разрывами.`);
   const left = 52, right = 586, top = 12, bottom = 188;
   const values = series.flatMap((s) => rows.map(s.value)).filter(Number.isFinite);
   const max = fixedMax || Math.max(1, ...values) * 1.1;
@@ -295,8 +295,18 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
   const cursor = svgNode("line", { y1: top, y2: bottom, class: "plot-cursor", display: "none" });
   svg.append(cursor);
   const tooltip = element("div", "chart-tooltip");
-  tooltip.hidden = true;
-  const hideTooltip = () => { tooltip.hidden = true; cursor.setAttribute("display", "none"); };
+  tooltip.style.setProperty("--tooltip-rows", Math.ceil(series.length / 2));
+  const tooltipTime = element("div", "tooltip-time");
+  const tooltipDetail = element("div", "tooltip-detail", resolution >= 60
+    ? `Среднее за ${number(resolution / 60)} мин` : `Шаг измерений ${resolution} с`);
+  const tooltipValues = element("div", "tooltip-values");
+  tooltip.append(tooltipTime, tooltipDetail, tooltipValues);
+  const hideTooltip = () => {
+    tooltipTime.textContent = "Значения при наведении на график";
+    tooltipValues.replaceChildren();
+    cursor.setAttribute("display", "none");
+  };
+  hideTooltip();
   svg.addEventListener("pointerdown", hideTooltip);
   svg.addEventListener("pointerleave", hideTooltip);
   svg.addEventListener("pointermove", (event) => {
@@ -323,23 +333,16 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
     const at = known ? row.ts : ts;
     cursor.setAttribute("x1", x(at)); cursor.setAttribute("x2", x(at));
     cursor.removeAttribute("display");
-    tooltip.replaceChildren(element("div", "tooltip-time", new Date(at * 1000).toLocaleString("ru-RU")));
-    if (row.coverageStart !== undefined || resolution === 300) {
-      tooltip.append(element("div", "tooltip-detail", `Среднее за ${number(resolution / 60)} мин`));
-    }
+    tooltipTime.textContent = new Date(at * 1000).toLocaleString("ru-RU");
+    tooltipValues.replaceChildren();
     const visible = series.filter((line) => !hiddenSeries.has(`${keyPrefix}:${line.label}`));
-    if (!known) tooltip.append(element("div", "", "Нет измерения"));
-    else if (!visible.length) tooltip.append(element("div", "", "Все линии скрыты"));
+    if (!known) tooltipValues.append(element("div", "", "Нет измерения"));
+    else if (!visible.length) tooltipValues.append(element("div", "", "Все линии скрыты"));
     else for (const line of visible) {
       const value = line.value(row);
       const text = Number.isFinite(value) ? `${number(value, 2)} ${options.unit || ""}`.trim() : "—";
-      tooltip.append(element("div", "", `${line.label}: ${text}`));
+      tooltipValues.append(element("div", "", `${line.label}: ${text}`));
     }
-    tooltip.hidden = false;
-    const bounds = card.getBoundingClientRect();
-    tooltip.style.left = `${Math.max(8, Math.min(event.clientX - bounds.left + 12,
-      bounds.width - tooltip.offsetWidth - 8))}px`;
-    tooltip.style.top = `${Math.max(8, event.clientY - bounds.top - tooltip.offsetHeight - 12)}px`;
   });
   const legend = element("div", "legend");
   series.forEach((line, index) => {
