@@ -13,7 +13,7 @@ def hour_key(ts):
 
 
 def encode(value):
-    return json.dumps(value, separators=(",", ":"), allow_nan=False).encode()
+    return json.dumps(value, separators=(",", ":"), allow_nan=False, sort_keys=True).encode()
 
 
 def aggregate(samples):
@@ -50,6 +50,15 @@ class Store:
             CREATE INDEX IF NOT EXISTS samples_hour ON samples(hour);
             CREATE TABLE IF NOT EXISTS pending (hour TEXT PRIMARY KEY, revision INTEGER NOT NULL);
         """)
+        if self.db.execute("PRAGMA user_version").fetchone()[0] == 0:
+            with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                if self.db.execute("PRAGMA user_version").fetchone()[0] == 0:
+                    self.db.execute("CREATE TABLE pending_days (day TEXT PRIMARY KEY, revision INTEGER NOT NULL)")
+                    self.db.execute("CREATE TABLE live_state (id INTEGER PRIMARY KEY CHECK (id=1), digest TEXT NOT NULL)")
+                    # Legacy hour jobs may still contain unexported samples.
+                    self.db.execute("INSERT INTO pending_days SELECT DISTINCT substr(hour, 1, 10), 1 FROM pending")
+                    self.db.execute("PRAGMA user_version=1")
 
     def close(self):
         self.db.close()
@@ -62,6 +71,8 @@ class Store:
                             (sample["ts"], hour, encode(sample).decode()))
             self.db.execute("""INSERT INTO pending VALUES (?, 1)
                 ON CONFLICT(hour) DO UPDATE SET revision=revision+1""", (hour,))
+            self.db.execute("""INSERT INTO pending_days VALUES (?, 1)
+                ON CONFLICT(day) DO UPDATE SET revision=revision+1""", (hour[:10],))
 
     def prune(self, now, days):
         # Only complete UTC days are pruned, keeping daily aggregate uploads complete.
@@ -69,16 +80,33 @@ class Store:
         with self.db:
             deleted = self.db.execute("DELETE FROM samples WHERE ts < ?", (cutoff,)).rowcount
             self.db.execute("DELETE FROM pending WHERE hour < ?", (hour_key(cutoff),))
+            self.db.execute("DELETE FROM pending_days WHERE day < ?", (hour_key(cutoff)[:10],))
         return deleted
 
-    def pending(self, limit):
-        return self.db.execute("SELECT hour, revision FROM pending ORDER BY hour DESC LIMIT ?",
-                               (limit,)).fetchall()
+    def pending(self, limit, before="~"):
+        return self.db.execute("SELECT hour, revision FROM pending WHERE hour < ? ORDER BY hour DESC LIMIT ?",
+                               (before, limit)).fetchall()
 
     def acknowledge(self, hour, revision):
         # A concurrent collector may have changed this hour while PUT was in progress.
         with self.db:
             self.db.execute("DELETE FROM pending WHERE hour=? AND revision=?", (hour, revision))
+
+    def pending_days(self, limit, before):
+        return self.db.execute("SELECT day, revision FROM pending_days WHERE day < ? ORDER BY day DESC LIMIT ?",
+                               (before, limit)).fetchall()
+
+    def acknowledge_day(self, day, revision):
+        with self.db:
+            self.db.execute("DELETE FROM pending_days WHERE day=? AND revision=?", (day, revision))
+
+    def live_digest(self):
+        row = self.db.execute("SELECT digest FROM live_state WHERE id=1").fetchone()
+        return row[0] if row else None
+
+    def acknowledge_live(self, digest):
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO live_state VALUES (1, ?)", (digest,))
 
     def samples(self, start, end):
         rows = self.db.execute("SELECT payload FROM samples WHERE hour >= ? AND hour < ? ORDER BY ts",

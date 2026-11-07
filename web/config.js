@@ -5,5 +5,5 @@ window.MONITORING_CONFIG = Object.freeze({
   // HTTPS URL of the public S3 prefix, without a trailing slash.
   dataBaseUrl: "",
   refreshSeconds: 60,
-  staleAfterSeconds: 150,
+  staleAfterSeconds: 420,
 });

@@ -2,8 +2,10 @@
 
 import fcntl
 import gzip
+from hashlib import sha256
+import time
 
-from .store import Store, aggregate, encode
+from .store import Store, aggregate, encode, hour_key
 
 
 def s3_client(config):
@@ -37,30 +39,56 @@ def publish(config, client_factory=s3_client):
             return 0
         store = Store(config.state_dir)
         try:
-            pending = store.pending(config.upload_max_hours)
-            if not pending:
-                return 0
-            client = client_factory(config)
+            cutoff = hour_key(int(time.time()))
+            client = None
+            count = 0
 
-            def put(key, document):
+            def put(key, body):
+                nonlocal client, count
+                if client is None:
+                    client = client_factory(config)
                 client.put_object(
                     Bucket=config.bucket, Key=f"{config.prefix}/{key}",
-                    Body=gzip.compress(encode(document), mtime=0),
+                    Body=gzip.compress(body, mtime=0),
                     ContentType="application/json", ContentEncoding="gzip",
                     CacheControl="public, max-age=30, must-revalidate",
                 )
+                count += 1
 
-            # Upload before acknowledging. Any failed PUT leaves the spool retryable.
-            for hour, _ in pending:
-                put(f"hours/{hour}.json", {"schema": 1, "resolution_s": config.sample_seconds,
-                                          "samples": store.hour(hour)})
-            for day in sorted({hour[:10] for hour, _ in pending}):
-                put(f"days/{day}.json", {"schema": 1, "resolution_s": 300,
-                                       "samples": aggregate(store.day(day))})
-            put("latest.json", {"schema": 1, "sample_interval_s": config.sample_seconds,
-                                "sample": store.latest()})
-            for hour, revision in pending:
+            # Archive first: readers switching to a new live hour/day can then
+            # use the completed archive. Acknowledge each successful PUT on its own.
+            for hour, revision in store.pending(config.upload_max_hours, cutoff):
+                rows = store.hour(hour)
+                if rows:  # The collector may have pruned the batch since selection.
+                    put(f"hours/{hour}.json", encode({"schema": 1, "resolution_s": config.sample_seconds,
+                                                     "samples": rows}))
                 store.acknowledge(hour, revision)
-            return len(pending)
+            for day, revision in store.pending_days(config.upload_max_hours, cutoff[:10]):
+                rows = store.day(day)
+                if rows:
+                    put(f"days/{day}.json", encode({"schema": 1, "resolution_s": 300,
+                                                    "samples": aggregate(rows)}))
+                store.acknowledge_day(day, revision)
+
+            # Read the latest sample and its day from one SQLite snapshot.
+            with store.db:
+                store.db.execute("BEGIN")
+                latest = store.latest()
+                if not latest:
+                    return count
+                hour = hour_key(latest["ts"])
+                day = hour[:10]
+                rows = store.day(day)
+            hour_start = latest["ts"] // 3600 * 3600
+            body = encode({"schema": 1, "sample_interval_s": config.sample_seconds, "sample": latest,
+                           "live_hour": {"key": f"hours/{hour}.json", "resolution_s": config.sample_seconds,
+                                         "samples": [row for row in rows if row["ts"] >= hour_start]},
+                           "live_day": {"key": f"days/{day}.json", "resolution_s": 300,
+                                        "samples": aggregate(rows)}})
+            digest = sha256(body).hexdigest()
+            if store.live_digest() != digest:
+                put("latest.json", body)
+                store.acknowledge_live(digest)
+            return count
         finally:
             store.close()

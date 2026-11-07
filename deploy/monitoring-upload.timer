@@ -1,8 +1,9 @@
 [Unit]
-Description=Publish monitoring data once per minute (manual opt-in)
+Description=Publish monitoring data every five minutes (manual opt-in)
 
 [Timer]
-OnCalendar=*-*-* *:*:00
+OnCalendar=*-*-* *:00/5:15
+AccuracySec=1s
 RandomizedDelaySec=5
 Persistent=false
 Unit=monitoring-upload.service

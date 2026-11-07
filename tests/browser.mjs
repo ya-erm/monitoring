@@ -154,8 +154,14 @@ try {
     disk_read_bytes_s: null, disk_write_bytes_s: null, load1: 1, load5: .5, load15: .25 };
   const metricsBase = "https://metrics.example.test/public";
   await page.route("**/config.js", (route) => route.fulfill({ contentType: "text/javascript",
-    body: `window.MONITORING_CONFIG = ${JSON.stringify({ enabled: true, dataBaseUrl: metricsBase, title: "Test" })};` }));
+    body: `window.MONITORING_CONFIG = ${JSON.stringify({ enabled: true, dataBaseUrl: metricsBase,
+      title: "Test", staleAfterSeconds: 420 })};` }));
   const received = [];
+  let embedLive = false;
+  const liveKeys = () => {
+    const stamp = new Date(point.ts * 1000).toISOString();
+    return [`hours/${stamp.slice(0, 10)}/${stamp.slice(11, 13)}.json`, `days/${stamp.slice(0, 10)}.json`];
+  };
   await page.route(`${metricsBase}/**`, async (route) => {
     const url = route.request().url();
     received.push(url);
@@ -165,6 +171,12 @@ try {
       samples: [{ ...point, ts: Math.floor(now / 300) * 300, cpu_peak_pct: 90 }] };
     else if (url.includes("/hours/")) document = { schema: 1, resolution_s: 15,
       samples: [point, { ...point, ts: now - 15 }] };
+    if (embedLive && url.endsWith("latest.json")) {
+      const [hour, day] = liveKeys();
+      document.live_hour = { key: hour, resolution_s: 15, samples: [point, { ...point, ts: point.ts - 15 }] };
+      document.live_day = { key: day, resolution_s: 300,
+        samples: [{ ...point, ts: Math.floor(point.ts / 300) * 300, cpu_peak_pct: 90 }] };
+    }
     await route.fulfill({ json: document, headers: { "access-control-allow-origin": "*" } });
   });
   await page.goto(base);
@@ -267,6 +279,22 @@ try {
   await settled();
   assert.deepEqual(await windowOf(), { start: customStart, end: customEnd });
   await choosePeriod(1);
+
+  // Live series replace the archive for the open bucket and remain fresh between uploads.
+  embedLive = true;
+  point.ts = now - 240;
+  const [liveHour, liveDay] = liveKeys();
+  received.length = 0;
+  await page.locator("#refresh").click();
+  await settled();
+  assert.equal(await page.locator("#status").innerText(), "Данные поступают");
+  assert.ok(received.includes(`${metricsBase}/latest.json`));
+  assert.ok(!received.includes(`${metricsBase}/${liveHour}`), "Open hour was requested separately");
+  const liveWindow = await windowOf();
+  assert.match(await hoverAt(disk, (point.ts - liveWindow.start) / (liveWindow.end - liveWindow.start)),
+    /Занято: 64 ГиБ/);
+  await choosePeriod(168);
+  assert.ok(!received.includes(`${metricsBase}/${liveDay}`), "Open day was requested separately");
 
   point.ts = now - 600;
   await page.locator("#refresh").click();

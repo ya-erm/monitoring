@@ -25,6 +25,11 @@ def sample(ts=1761440400, **updates):
     return result
 
 
+def publish_at(config, client, ts):
+    with patch("agent.upload.time.time", return_value=ts):
+        return publish(config, client)
+
+
 class AgentTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -134,12 +139,23 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(store.pending(1))
         self.assertEqual(store.prune(now, 7), 1)
         self.assertEqual(len(store.hour(hour_key(now))), 2)
+        self.assertEqual([day for day, _ in store.pending_days(10, "~")], [hour_key(now)[:10]])
+
+    def test_legacy_pending_hours_seed_day_queue(self):
+        store = Store(self.config.state_dir)
+        store.add(sample())
+        store.db.executescript("DROP TABLE pending_days; DROP TABLE live_state; PRAGMA user_version=0;")
+        store.close()
+        upgraded = Store(self.config.state_dir)
+        self.addCleanup(upgraded.close)
+        self.assertEqual(upgraded.pending_days(10, "~"), [(hour_key(sample()["ts"])[:10], 1)])
 
     def test_failed_upload_retains_pending_and_retry_sends_only_numeric_public_data(self):
         config = self.configured()
         store = Store(config.state_dir)
         self.addCleanup(store.close)
         store.add(sample())
+        now = sample()["ts"] + 30
         calls = []
 
         class BrokenClient:
@@ -147,24 +163,25 @@ class AgentTests(unittest.TestCase):
                 raise RuntimeError("fake network failure")
 
         with self.assertRaises(RuntimeError):
-            publish(config, lambda _: BrokenClient())
+            publish_at(config, lambda _: BrokenClient(), now)
         self.assertEqual(len(store.pending(10)), 1)
 
         class Client:
             def put_object(self, **kwargs):
                 calls.append(kwargs)
 
-        self.assertEqual(publish(config, lambda _: Client()), 1)
-        self.assertFalse(store.pending(10))
-        self.assertEqual(len(calls), 3)
-        self.assertTrue(calls[0]["Key"].startswith("monitoring/test/hours/"))
-        self.assertTrue(calls[1]["Key"].startswith("monitoring/test/days/"))
-        self.assertTrue(calls[2]["Key"].endswith("/latest.json"))
+        self.assertEqual(publish_at(config, lambda _: Client(), now), 1)
+        self.assertTrue(store.pending(10), "Open hour still needs to be archived")
+        self.assertEqual(publish_at(config, lambda _: self.fail("Unchanged batch written twice"), now + 5), 0)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0]["Key"].endswith("/latest.json"))
         for call in calls:
             self.assertEqual(call["ContentEncoding"], "gzip")
             self.assertNotIn("ACL", call)
             document = json.loads(gzip.decompress(call["Body"]))
             self.assertEqual(document["schema"], 1)
+            self.assertEqual(document["live_hour"]["samples"], [sample()])
+            self.assertEqual(document["live_day"]["samples"][0]["count"], 1)
             for forbidden in ("fake-secret", "fake-id", "hostname", "eth0", "vda"):
                 self.assertNotIn(forbidden, json.dumps(document))
 
@@ -179,8 +196,44 @@ class AgentTests(unittest.TestCase):
                 if "/hours/" in kwargs["Key"]:
                     store.add(sample(1761440415))
 
-        publish(config, lambda _: Client())
+        publish_at(config, lambda _: Client(), sample()["ts"] + 3600)
         self.assertEqual(len(store.pending(10)), 1)
+
+    def test_midnight_archives_and_partial_failure_do_not_repeat_successful_puts(self):
+        config = self.configured()
+        store = Store(config.state_dir)
+        self.addCleanup(store.close)
+        midnight = sample()["ts"] // 86400 * 86400 + 86400
+        before, after = sample(midnight - 15), sample(midnight + 15)
+        store.add(before)
+        store.add(after)
+        calls, documents = [], {}
+        fail_day = True
+
+        class Client:
+            def put_object(self, **kwargs):
+                key = kwargs["Key"].removeprefix(f"{config.prefix}/")
+                calls.append(key)
+                if key.startswith("days/") and fail_day:
+                    raise RuntimeError("fake failure after hour was archived")
+                documents[key] = json.loads(gzip.decompress(kwargs["Body"]))
+
+        yesterday = hour_key(before["ts"])[:10]
+        hour = f"hours/{yesterday}/23.json"
+        day = f"days/{yesterday}.json"
+        with self.assertRaises(RuntimeError):
+            publish_at(config, lambda _: Client(), midnight + 20)
+        self.assertEqual(calls, [hour, day])
+        fail_day = False
+        self.assertEqual(publish_at(config, lambda _: Client(), midnight + 320), 2)
+        self.assertEqual(calls, [hour, day, day, "latest.json"])
+        self.assertEqual(documents[hour]["samples"], [before])
+        self.assertEqual(documents[day]["samples"][0]["count"], 1)
+        self.assertEqual(documents["latest.json"]["sample"], after)
+        self.assertEqual(documents["latest.json"]["live_hour"]["samples"], [after])
+        store.add(sample(midnight + 330))
+        self.assertEqual(publish_at(config, lambda _: Client(), midnight + 620), 1)
+        self.assertEqual(calls[-2:], ["latest.json", "latest.json"])
 
     @unittest.skipUnless(importlib.util.find_spec("boto3"), "optional boto3 is not installed")
     def test_real_s3_sdk_accepts_upload_parameters_without_network(self):
@@ -199,7 +252,7 @@ class AgentTests(unittest.TestCase):
                     "ContentType": "application/json", "ContentEncoding": "gzip",
                     "CacheControl": "public, max-age=30, must-revalidate",
                 })
-            self.assertEqual(publish(config, lambda _: client), 1)
+            self.assertEqual(publish_at(config, lambda _: client, sample()["ts"] + 86400), 3)
             stub.assert_no_pending_responses()
 
 

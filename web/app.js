@@ -498,7 +498,7 @@ async function fetchJson(key, signal, optional = false) {
   return data;
 }
 
-async function history(start, end, resolution, signal) {
+async function history(start, end, resolution, signal, live) {
   const step = resolution === 300 ? 86400 : 3600;
   const keys = [];
   for (let ts = Math.floor(start / step) * step; ts <= end; ts += step) {
@@ -510,7 +510,8 @@ async function history(start, end, resolution, signal) {
   const rows = [];
   await Promise.all(Array.from({ length: Math.min(4, keys.length) }, async () => {
     while (next < keys.length) {
-      const data = await fetchJson(keys[next++], signal, true);
+      const key = keys[next++];
+      const data = live.get(key) ?? await fetchJson(key, signal, true);
       if (data) {
         if (!Array.isArray(data.samples) || data.resolution_s !== resolution) {
           throw new Error("Некорректный файл истории.");
@@ -547,7 +548,9 @@ async function refresh() {
       }
       latest = document.sample;
       actualResolution = resolution || document.sample_interval_s;
-      rows = await history(start, end, actualResolution, own.signal);
+      // Older publishers omit the live series; their archived history still works.
+      const live = new Map([document.live_hour, document.live_day].filter(Boolean).map((data) => [data.key, data]));
+      rows = await history(start, end, actualResolution, own.signal, live);
     }
     if (own.signal.aborted) return;
     summary(latest);

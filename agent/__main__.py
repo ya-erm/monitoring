@@ -72,7 +72,7 @@ def main(argv=None):
         if args.command == "upload":
             from .upload import publish
             count = publish(config)
-            LOG.info("Uploaded %d hour(s)", count)
+            LOG.info("Uploaded %d object(s)", count)
         else:
             collect(config, once=args.command == "once")
         return 0

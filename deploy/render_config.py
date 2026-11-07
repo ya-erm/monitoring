@@ -15,7 +15,7 @@ def configuration(data_url="", title="Сервер"):
                 or parsed.password or parsed.query or parsed.fragment):
             raise ValueError("MONITORING_DATA_URL must be a public HTTPS URL without credentials/query")
     return {"enabled": bool(data_url), "title": title.strip() or "Сервер",
-            "dataBaseUrl": data_url, "refreshSeconds": 60, "staleAfterSeconds": 150}
+            "dataBaseUrl": data_url, "refreshSeconds": 60, "staleAfterSeconds": 420}
 
 
 def main():
