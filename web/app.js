@@ -1,7 +1,10 @@
 /* Static dashboard: no build, CDN, account, analytics, or write credentials. */
 "use strict";
 
-const config = window.MONITORING_CONFIG;
+const settings = window.MONITORING_CONFIG;
+const servers = settings.servers?.length ? settings.servers : [];
+const requestedServer = new URLSearchParams(location.search).get("server");
+let config = { ...settings, ...(servers.find((server) => server.id === requestedServer) || servers[0]) };
 const demo = new URLSearchParams(location.search).get("demo") === "1";
 const byId = (id) => document.getElementById(id);
 const palette = ["#008f84", "#dd883b", "#7564c4", "#d05976"];
@@ -480,13 +483,14 @@ function baseUrl() {
 }
 
 async function fetchJson(key, signal, optional = false) {
-  const cached = cache.get(key);
+  const url = `${baseUrl()}/${key}`;
+  const cached = cache.get(url);
   const stamp = new Date().toISOString();
   const current = key === `days/${stamp.slice(0, 10)}.json`
     || key === `hours/${stamp.slice(0, 10)}/${stamp.slice(11, 13)}.json`;
   const ttl = current ? 30000 : 15 * 60000;
   if (key !== "latest.json" && cached && Date.now() - cached.at < ttl) return cached.data;
-  const response = await fetch(`${baseUrl()}/${key}`, {
+  const response = await fetch(url, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(12000)]),
     credentials: "omit", referrerPolicy: "no-referrer", cache: "no-cache",
   });
@@ -494,11 +498,11 @@ async function fetchJson(key, signal, optional = false) {
   if (!response.ok) throw new Error(`Не удалось прочитать данные (HTTP ${response.status}).`);
   const data = await response.json();
   if (data.schema !== 1) throw new Error("Неподдерживаемый формат данных.");
-  if (key !== "latest.json") cache.set(key, { at: Date.now(), data });
+  if (key !== "latest.json") cache.set(url, { at: Date.now(), data });
   return data;
 }
 
-async function history(start, end, resolution, signal, live) {
+async function loadHistory(start, end, resolution, signal, live) {
   const step = resolution === 300 ? 86400 : 3600;
   const keys = [];
   for (let ts = Math.floor(start / step) * step; ts <= end; ts += step) {
@@ -550,7 +554,7 @@ async function refresh() {
       actualResolution = resolution || document.sample_interval_s;
       // Older publishers omit the live series; their archived history still works.
       const live = new Map([document.live_hour, document.live_day].filter(Boolean).map((data) => [data.key, data]));
-      rows = await history(start, end, actualResolution, own.signal, live);
+      rows = await loadHistory(start, end, actualResolution, own.signal, live);
     }
     if (own.signal.aborted) return;
     summary(latest);
@@ -584,6 +588,35 @@ window.addEventListener("scroll", hideChartTooltips, true);
 window.addEventListener("resize", hideChartTooltips);
 if (demo || config.enabled === true) {
   byId("dashboard").hidden = false;
+  if (!demo && servers.length > 1) {
+    byId("server-control").hidden = false;
+    for (const server of servers) {
+      const option = element("option", "", server.title);
+      option.value = server.id;
+      byId("server").append(option);
+    }
+    byId("server").value = config.id;
+    byId("server").addEventListener("change", () => {
+      const server = servers.find((entry) => entry.id === byId("server").value);
+      if (!server) return;
+      controller?.abort();
+      config = { ...settings, ...server };
+      cache.clear();
+      closeRangePicker(false);
+      hideChartTooltips();
+      lastRender = null;
+      byId("summary").replaceChildren();
+      byId("charts").replaceChildren();
+      byId("updated").textContent = "";
+      byId("notice").textContent = "";
+      byId("title").textContent = server.title;
+      setStatus("Загрузка…");
+      const url = new URL(location.href);
+      url.searchParams.set("server", server.id);
+      window.history.replaceState(null, "", url);
+      refresh();
+    });
+  }
   updateRangeLabel();
   byId("range").addEventListener("click", openRangePicker);
   byId("range-form").addEventListener("submit", applyDateFields);

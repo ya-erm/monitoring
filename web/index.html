@@ -20,6 +20,10 @@
       <p id="notice" class="notice" aria-live="polite"></p>
       <section id="dashboard" hidden>
         <div class="toolbar">
+          <div id="server-control" class="period-control" hidden>
+            <label for="server">Сервер</label>
+            <span class="unit-control"><select id="server" class="server-select"></select></span>
+          </div>
           <div class="period-control"><span id="range-label">Период</span>
             <button id="range" type="button" aria-haspopup="dialog" aria-controls="range-popover"
               aria-expanded="false" aria-labelledby="range-label range-value">

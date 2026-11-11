@@ -303,8 +303,42 @@ try {
   await page.locator("#refresh").click();
   await page.waitForFunction(() => document.getElementById("status").textContent === "Ошибка чтения");
   assert.match(await page.locator("#notice").innerText(), /503/);
+
+  const secondaryBase = "https://metrics.example.test/second";
+  const serverSettings = { enabled: true, staleAfterSeconds: 420, servers: [
+    { id: "first", title: "First server", dataBaseUrl: metricsBase },
+    { id: "second", title: "Second server", dataBaseUrl: secondaryBase },
+  ] };
+  await page.route("**/config.js", (route) => route.fulfill({ contentType: "text/javascript",
+    body: `window.MONITORING_CONFIG = ${JSON.stringify(serverSettings)};` }));
+  point.ts = now;
+  await page.unroute(`${metricsBase}/latest.json`);
+  await page.route(`${secondaryBase}/**`, async (route) => {
+    const data = { ...point, cpu_busy_pct: 87 };
+    await route.fulfill({ json: route.request().url().endsWith("latest.json")
+      ? { schema: 1, sample_interval_s: 15, sample: data }
+      : { schema: 1, resolution_s: route.request().url().includes("/days/") ? 300 : 15, samples: [data] } });
+  });
+  await page.goto(`${base}/?server=second`);
+  await settled();
+  assert.equal(await page.locator("#server").inputValue(), "second");
+  assert.equal(await page.locator("h1").innerText(), "Second server");
+  assert.match(await page.locator(".metric-value").first().innerText(), /87/);
+  await page.locator("#server").selectOption("first");
+  await settled();
+  assert.equal(await page.locator("h1").innerText(), "First server");
+  assert.match(await page.locator(".metric-value").first().innerText(), /45/);
+  assert.equal(new URL(page.url()).searchParams.get("server"), "first");
+  await page.locator("#server").selectOption("second");
+  await settled();
+  assert.match(await page.locator(".metric-value").first().innerText(), /87/);
+  for (const width of [320, 390, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
+      `Server selector overflowed at ${width}px`);
+  }
   assert.deepEqual(errors, []);
-  console.log("PASS: disabled/demo; mobile/desktop dropdown; 7 presets; exact local/UTC dates; validation; fixed refresh; reverse drag/undo; RAM/swap toggles; disk history; percent/GiB values; hover values/gaps; stale data; HTTP failure.");
+  console.log("PASS: disabled/demo; mobile/desktop dropdown; presets; exact dates; validation; drag/undo; units; hover; live batches; stale data; HTTP failure; server switching and direct links.");
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));
