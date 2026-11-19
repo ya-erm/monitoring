@@ -64,6 +64,12 @@ try {
   assert.equal(averaged[0].net_rx_bytes_s, null, "Unknown metric became zero");
   assert.notEqual(averaged[0].segment, averaged[1].segment, "Gap was joined");
   assert.equal(averaged[1].segment, averaged[2].segment, "Contiguous data was split");
+  const coarse = await page.evaluate(() => aggregateForChart([
+    { ts: 1800, interval_s: 15, count: 20, cpu_busy_pct: 20, cpu_peak_pct: 95 },
+    { ts: 2100, interval_s: 15, count: 10, cpu_busy_pct: 80, cpu_peak_pct: 90 },
+  ], 300, 1800));
+  assert.equal(coarse[0].cpu_busy_pct, 40, "Incomplete five-minute bucket was overweighted");
+  assert.equal(coarse[0].cpu_peak_pct, 95, "Original peak was replaced by a mean");
   for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 844 });
     const cpu = page.locator(".chart").first();
@@ -117,6 +123,13 @@ try {
     assert.equal(await page.locator("#range-popover").isVisible(), false);
   }
   for (const hours of [1, 2, 3, 6, 24, 168, 720]) await choosePeriod(hours);
+  for (const [hours, resolution] of [[168, 1800], [720, 7200]]) {
+    await choosePeriod(hours);
+    assert.equal(await page.locator(".chart svg").first().getAttribute("data-resolution"), String(resolution));
+    const path = await page.locator('path[data-series="Пик вычислений"]').getAttribute("d");
+    assert.ok((path.match(/[ML]/g) || []).length <= 365, "Long-range peak line was not reduced");
+    assert.ok((path.match(/M/g) || []).length > 1, "Long-range averaging joined the data gap");
+  }
   await choosePeriod(1);
   assert.equal(await page.locator(".chart svg").first().getAttribute("data-resolution"), "15");
   assert.equal(await page.locator('path[data-series="Пик вычислений"]').count(), 0);

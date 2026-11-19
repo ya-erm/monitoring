@@ -408,12 +408,14 @@ function aggregateForChart(rows, sourceResolution, resolution) {
   return groups.map(({ segment, rows: samples }) => {
     const average = (key) => {
       const known = samples.filter((s) => Number.isFinite(s[key]));
-      const weight = (s) => Math.min(sourceResolution, s.interval_s || sourceResolution);
+      const weight = (s) => Math.min(sourceResolution, (s.interval_s || sourceResolution)
+        * (Number.isFinite(s.count) && s.count > 0 ? s.count : 1));
       const total = known.reduce((sum, s) => sum + weight(s), 0);
       return total ? known.reduce((sum, s) => sum + s[key] * weight(s), 0) / total : null;
     };
     const result = Object.fromEntries(Object.keys(samples[0]).map((key) => [key, average(key)]));
-    const cpus = samples.map((s) => s.cpu_busy_pct).filter(Number.isFinite);
+    const cpus = samples.map((s) => Number.isFinite(s.cpu_peak_pct) ? s.cpu_peak_pct : s.cpu_busy_pct)
+      .filter(Number.isFinite);
     return { ...result, segment, cpu_peak_pct: cpus.length ? Math.max(...cpus) : null,
       coverageStart: samples[0].ts - sourceResolution * .9,
       coverageEnd: samples.at(-1).ts + sourceResolution * .9 };
@@ -422,12 +424,14 @@ function aggregateForChart(rows, sourceResolution, resolution) {
 
 function render(rows, start, end, resolution) {
   const sourceRows = rows;
-  const displayResolution = resolution < 300 && end - start > 3 * 3600
-    ? Math.max(resolution, Math.ceil((end - start) / 360 / 60) * 60) : resolution;
+  const quantum = Math.max(60, resolution);
+  const displayResolution = end - start > 3 * 3600
+    ? Math.max(resolution, Math.ceil((end - start) / 360 / quantum) * quantum) : resolution;
   if (displayResolution > resolution) rows = aggregateForChart(rows, resolution, displayResolution);
   resolution = displayResolution;
+  const intervalLabel = resolution % 3600 === 0 ? `${number(resolution / 3600)} ч` : `${number(resolution / 60)} мин`;
   byId("chart-detail").textContent = resolution >= 60
-    ? `Средние за ${number(resolution / 60)} мин; пики CPU показаны отдельно. При приближении детализация увеличивается.`
+    ? `Средние за ${intervalLabel}; пики CPU — максимум каждого интервала. При приближении детализация увеличивается.`
     : `Исходные измерения с шагом ${resolution} с.`;
   byId("charts").replaceChildren();
   const field = (label, key, scale = 1) => ({ label,
