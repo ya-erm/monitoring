@@ -14,7 +14,7 @@ let busy = false;
 let selecting = false;
 let selectedRange = { type: "relative", hours: 6 };
 const rangeHistory = [];
-const hiddenSeries = new Set();
+const hiddenSeries = new Set(["CPU · %:I/O wait", "CPU · %:Steal"]);
 const presets = new Map([[1, "1 час"], [2, "2 часа"], [3, "3 часа"], [6, "6 часов"],
   [24, "Сутки"], [168, "Неделя"], [720, "Месяц"]]);
 
@@ -190,7 +190,7 @@ function svgNode(tag, attrs = {}, text) {
 const number = (value, digits = 1) => Number.isFinite(value)
   ? value.toLocaleString("ru-RU", { maximumFractionDigits: digits }) : "—";
 const percent = (value) => `${number(value)} %`;
-const gib = (value) => Number.isFinite(value) ? `${number(value / 2 ** 30)} ГиБ` : "—";
+const gib = (value) => Number.isFinite(value) ? `${number(value / 2 ** 30)} Гб` : "—";
 const memoryPct = (s) => s.mem_total_bytes > 0 && Number.isFinite(s.mem_available_bytes)
   ? (1 - s.mem_available_bytes / s.mem_total_bytes) * 100 : null;
 const swapPct = (s) => s.swap_total_bytes === 0 && s.swap_used_bytes === 0 ? 0
@@ -204,7 +204,7 @@ const diskPct = (s) => s.disk_total_bytes > 0 && diskUsed(s) !== null
   ? diskUsed(s) / s.disk_total_bytes * 100 : null;
 const usageLabel = (pct, bytes) => {
   const relative = Number.isFinite(pct) ? `${number(pct, 2)} %` : "—";
-  const absolute = Number.isFinite(bytes) ? `${number(bytes / 2 ** 30, 2)} ГиБ` : "—";
+  const absolute = Number.isFinite(bytes) ? `${number(bytes / 2 ** 30, 2)} Гб` : "—";
   return relative === "—" && absolute === "—" ? "—" : `${relative} · ${absolute}`;
 };
 
@@ -220,7 +220,7 @@ function summary(sample) {
     ["CPU", percent(sample.cpu_busy_pct), `Ожидание диска ${percent(sample.cpu_iowait_pct)}`],
     ["RAM", percent(memoryPct(sample)), `${gib(sample.mem_available_bytes)} доступно`],
     ["Сеть ↓ / ↑", `${number(sample.net_rx_bytes_s / 2 ** 20)} / ${number(sample.net_tx_bytes_s / 2 ** 20)}`,
-      "МиБ/с · входящий / исходящий"],
+      "Мб/с · входящий / исходящий"],
     ["Свободно на диске", gib(sample.disk_available_bytes), `Всего ${gib(sample.disk_total_bytes)}`],
   ];
   // Null rates must remain unknown instead of becoming zero through JS coercion.
@@ -253,7 +253,7 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
   if (dualAxis) {
     svg.append(svgNode("text", { x: left - 8, y: 12, "text-anchor": "end", class: "axis-unit" }, "%"));
     if (dualAxis.capacity !== null) {
-      svg.append(svgNode("text", { x: 586, y: 12, "text-anchor": "end", class: "axis-unit" }, dualAxis.label));
+      svg.append(svgNode("text", { x: right + 10, y: 12, class: "axis-unit" }, dualAxis.label));
     }
   }
   for (let i = 0; i <= 4; i++) {
@@ -447,15 +447,15 @@ function render(rows, start, end, resolution) {
   chart("Память", [
     { label: "RAM", value: memoryPct, describe: (s) => usageLabel(memoryPct(s), memoryUsed(s)) },
     { label: "Swap", value: swapPct, describe: (s) => usageLabel(swapPct(s), s.swap_used_bytes) },
-  ], 100, { id: "memory", secondaryAxis: { label: "RAM, ГиБ", capacity: ramCapacity },
-    note: ramCapacity !== null ? "% — от объёма каждого типа памяти. Справа — ГиБ RAM."
-      : rows.length ? "Объём RAM менялся или неизвестен. ГиБ — в подсказке." : "" });
+  ], 100, { id: "memory", secondaryAxis: { label: "RAM, Гб", capacity: ramCapacity },
+    note: ramCapacity !== null ? "% — от объёма каждого типа памяти. Справа — Гб RAM."
+      : rows.length ? "Объём RAM менялся или неизвестен. Гб — в подсказке." : "" });
   chart("Место на диске", [
     { label: "Занято", value: diskPct, describe: (s) => usageLabel(diskPct(s), diskUsed(s)) },
-  ], 100, { id: "disk", secondaryAxis: { label: "ГиБ", capacity: diskCapacity },
-    note: rows.length && diskCapacity === null ? "Объём диска менялся или неизвестен. ГиБ — в подсказке." : "" });
-  chart("Сеть · МиБ/с", [field("Входящий", "net_rx_bytes_s", 2 ** 20), field("Исходящий", "net_tx_bytes_s", 2 ** 20)], null, { unit: "МиБ/с" });
-  chart("Дисковый I/O · МиБ/с", [field("Чтение", "disk_read_bytes_s", 2 ** 20), field("Запись", "disk_write_bytes_s", 2 ** 20)], null, { unit: "МиБ/с" });
+  ], 100, { id: "disk", secondaryAxis: { label: "Гб", capacity: diskCapacity },
+    note: rows.length && diskCapacity === null ? "Объём диска менялся или неизвестен. Гб — в подсказке." : "" });
+  chart("Сеть · Мб/с", [field("Входящий", "net_rx_bytes_s", 2 ** 20), field("Исходящий", "net_tx_bytes_s", 2 ** 20)], null, { unit: "Мб/с" });
+  chart("Дисковый I/O · Мб/с", [field("Чтение", "disk_read_bytes_s", 2 ** 20), field("Запись", "disk_write_bytes_s", 2 ** 20)], null, { unit: "Мб/с" });
 }
 
 function demoData(start, end, resolution) {

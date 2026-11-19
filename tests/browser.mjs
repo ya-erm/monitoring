@@ -214,13 +214,13 @@ try {
   const fixedWindow = await windowOf();
   const fraction = (now - fixedWindow.start) / (fixedWindow.end - fixedWindow.start) - .0001;
   const usage = await hoverAt(memory, fraction);
-  assert.match(usage, /RAM: 50 % · 2 ГиБ/);
-  assert.match(usage, /Swap: 50 % · 0,5 ГиБ/);
+  assert.match(usage, /RAM: 50 % · 2 Гб/);
+  assert.match(usage, /Swap: 50 % · 0,5 Гб/);
   assert.equal(await memory.locator("select").count(), 0);
-  assert.equal(await memory.locator(".axis-unit").last().textContent(), "RAM, ГиБ");
+  assert.equal(await memory.locator(".axis-unit").last().textContent(), "RAM, Гб");
   assert.deepEqual(await memory.locator(".axis-right").allTextContents(), ["0", "1", "2", "3", "4"]);
   const disk = page.locator('[data-chart="disk"]');
-  assert.match(await hoverAt(disk, fraction), /Занято: 50 % · 64 ГиБ/);
+  assert.match(await hoverAt(disk, fraction), /Занято: 50 % · 64 Гб/);
   assert.equal(await disk.locator("select").count(), 0);
   assert.deepEqual(await disk.locator(".axis-right").allTextContents(), ["0", "32", "64", "96", "128"]);
   assert.match(await hoverAt(disk, .5), /Нет измерения/);
@@ -241,7 +241,7 @@ try {
   assert.match(await memory.locator(".chart-note").innerText(), /Объём RAM менялся/);
   const resizedWindow = await windowOf();
   const olderFraction = (now - 15 - resizedWindow.start) / (resizedWindow.end - resizedWindow.start);
-  assert.match(await hoverAt(memory, olderFraction), /RAM: 75 % · 6 ГиБ/);
+  assert.match(await hoverAt(memory, olderFraction), /RAM: 75 % · 6 Гб/);
   resizedCapacity = false;
   await page.locator("#refresh").click();
   await settled();
@@ -312,7 +312,7 @@ try {
   assert.ok(!received.includes(`${metricsBase}/${liveHour}`), "Open hour was requested separately");
   const liveWindow = await windowOf();
   assert.match(await hoverAt(disk, (point.ts - liveWindow.start) / (liveWindow.end - liveWindow.start)),
-    /Занято: 50 % · 64 ГиБ/);
+    /Занято: 50 % · 64 Гб/);
   await choosePeriod(168);
   assert.ok(!received.includes(`${metricsBase}/${liveDay}`), "Open day was requested separately");
 
