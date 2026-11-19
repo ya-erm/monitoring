@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "web");
 const types = { "index.html": "text/html", "config.js": "text/javascript",
-  "app.js": "text/javascript", "style.css": "text/css" };
+  "app.js": "text/javascript", "style.css": "text/css", "favicon.svg": "image/svg+xml" };
 const server = createServer(async (request, response) => {
   const name = new URL(request.url, "http://localhost").pathname.slice(1) || "index.html";
   if (!Object.hasOwn(types, name)) { response.writeHead(404).end(); return; }

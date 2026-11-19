@@ -453,8 +453,7 @@ function render(rows, start, end, resolution) {
     { label: "RAM", value: memoryPct, describe: (s) => usageLabel(memoryPct(s), memoryUsed(s)) },
     { label: "Swap", value: swapPct, describe: (s) => usageLabel(swapPct(s), s.swap_used_bytes) },
   ], 100, { id: "memory", secondaryAxis: { label: "RAM, Гб", capacity: ramCapacity },
-    note: ramCapacity !== null ? "% — от объёма каждого типа памяти. Справа — Гб RAM."
-      : rows.length ? "Объём RAM менялся или неизвестен. Гб — в подсказке." : "" });
+    note: rows.length && ramCapacity === null ? "Объём RAM менялся или неизвестен. Гб — в подсказке." : "" });
   chart("Место на диске", [
     { label: "Занято", value: diskPct, describe: (s) => usageLabel(diskPct(s), diskUsed(s)) },
   ], 100, { id: "disk", secondaryAxis: { label: "Гб", capacity: diskCapacity },
