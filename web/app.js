@@ -15,8 +15,6 @@ let selecting = false;
 let selectedRange = { type: "relative", hours: 6 };
 const rangeHistory = [];
 const hiddenSeries = new Set();
-const chartUnits = { memory: "%", disk: "%" };
-let lastRender;
 const presets = new Map([[1, "1 час"], [2, "2 часа"], [3, "3 часа"], [6, "6 часов"],
   [24, "Сутки"], [168, "Неделя"], [720, "Месяц"]]);
 
@@ -195,14 +193,20 @@ const percent = (value) => `${number(value)} %`;
 const gib = (value) => Number.isFinite(value) ? `${number(value / 2 ** 30)} ГиБ` : "—";
 const memoryPct = (s) => s.mem_total_bytes > 0 && Number.isFinite(s.mem_available_bytes)
   ? (1 - s.mem_available_bytes / s.mem_total_bytes) * 100 : null;
-const swapPct = (s) => s.swap_total_bytes > 0 && Number.isFinite(s.swap_used_bytes)
-  ? s.swap_used_bytes / s.swap_total_bytes * 100 : 0;
+const swapPct = (s) => s.swap_total_bytes === 0 && s.swap_used_bytes === 0 ? 0
+  : s.swap_total_bytes > 0 && Number.isFinite(s.swap_used_bytes)
+    ? s.swap_used_bytes / s.swap_total_bytes * 100 : null;
 const memoryUsed = (s) => Number.isFinite(s.mem_total_bytes) && Number.isFinite(s.mem_available_bytes)
   ? s.mem_total_bytes - s.mem_available_bytes : null;
 const diskUsed = (s) => Number.isFinite(s.disk_total_bytes) && Number.isFinite(s.disk_available_bytes)
   ? s.disk_total_bytes - s.disk_available_bytes : null;
 const diskPct = (s) => s.disk_total_bytes > 0 && diskUsed(s) !== null
   ? diskUsed(s) / s.disk_total_bytes * 100 : null;
+const usageLabel = (pct, bytes) => {
+  const relative = Number.isFinite(pct) ? `${number(pct, 2)} %` : "—";
+  const absolute = Number.isFinite(bytes) ? `${number(bytes / 2 ** 30, 2)} ГиБ` : "—";
+  return relative === "—" && absolute === "—" ? "—" : `${relative} · ${absolute}`;
+};
 
 function setStatus(text, warning = false) {
   byId("status").textContent = text;
@@ -235,38 +239,31 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
   card.dataset.chart = keyPrefix;
   const heading = element("div", "chart-heading");
   heading.append(element("h2", "", title));
-  if (options.id) {
-    const units = element("select", "chart-unit");
-    units.setAttribute("aria-label", `Единицы: ${title}`);
-    for (const unit of ["%", "ГиБ"]) {
-      const option = element("option", "", unit);
-      option.value = unit;
-      units.append(option);
-    }
-    units.value = chartUnits[options.id];
-    units.addEventListener("change", () => {
-      chartUnits[options.id] = units.value;
-      render(...lastRender);
-      document.querySelector(`[data-chart="${options.id}"] select`).focus({ preventScroll: true });
-    });
-    const control = element("span", "unit-control");
-    control.append(units);
-    heading.append(control);
-  }
   card.append(heading);
   const svg = svgNode("svg", { viewBox: "0 0 600 230", role: "img", "aria-label": title,
     "aria-describedby": "chart-range-help", "data-start": start, "data-end": end,
     "data-resolution": resolution });
   svg.setAttribute("aria-label", `${title}. ${rows.length} измерений; пропуски показаны разрывами.`);
-  const left = 52, right = 586, top = 12, bottom = 188;
+  const dualAxis = options.secondaryAxis;
+  const left = 52, right = dualAxis ? 528 : 586, top = dualAxis ? 26 : 12, bottom = 188;
   const values = series.flatMap((s) => rows.map(s.value)).filter(Number.isFinite);
   const max = fixedMax || Math.max(1, ...values) * 1.1;
   const x = (ts) => left + (ts - start) / (end - start) * (right - left);
   const y = (value) => bottom - value / max * (bottom - top);
+  if (dualAxis) {
+    svg.append(svgNode("text", { x: left - 8, y: 12, "text-anchor": "end", class: "axis-unit" }, "%"));
+    if (dualAxis.capacity !== null) {
+      svg.append(svgNode("text", { x: 586, y: 12, "text-anchor": "end", class: "axis-unit" }, dualAxis.label));
+    }
+  }
   for (let i = 0; i <= 4; i++) {
     const value = max * i / 4;
     svg.append(svgNode("line", { x1: left, x2: right, y1: y(value), y2: y(value) }),
       svgNode("text", { x: left - 8, y: y(value) + 4, "text-anchor": "end" }, format(value)));
+    if (dualAxis && dualAxis.capacity !== null) {
+      svg.append(svgNode("text", { x: right + 10, y: y(value) + 4, class: "axis-right" },
+        number(value / 100 * dualAxis.capacity / 2 ** 30)));
+    }
   }
   const longRange = end - start > 86400;
   for (let i = 0; i <= 3; i++) {
@@ -339,7 +336,8 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
     else if (!visible.length) tooltipValues.append(element("div", "", "Все линии скрыты"));
     else for (const line of visible) {
       const value = line.value(row);
-      const text = Number.isFinite(value) ? `${number(value, 2)} ${options.unit || ""}`.trim() : "—";
+      const text = line.describe ? line.describe(row)
+        : Number.isFinite(value) ? `${number(value, 2)} ${options.unit || ""}`.trim() : "—";
       const item = element("div", "tooltip-series", `${line.label}: ${text}`);
       item.style.setProperty("--series-color", palette[series.indexOf(line)]);
       tooltipValues.append(item);
@@ -389,6 +387,7 @@ function drawChart(title, series, rows, start, end, resolution, fixedMax, format
     legend.append(item);
   });
   card.append(svg, legend, tooltip);
+  if (options.note) card.append(element("p", "chart-note", options.note));
   byId("charts").append(card);
 }
 
@@ -422,7 +421,7 @@ function aggregateForChart(rows, sourceResolution, resolution) {
 }
 
 function render(rows, start, end, resolution) {
-  lastRender = [rows, start, end, resolution];
+  const sourceRows = rows;
   const displayResolution = resolution < 300 && end - start > 3 * 3600
     ? Math.max(resolution, Math.ceil((end - start) / 360 / 60) * 60) : resolution;
   if (displayResolution > resolution) rows = aggregateForChart(rows, resolution, displayResolution);
@@ -439,16 +438,22 @@ function render(rows, start, end, resolution) {
   const chart = (title, series, max = null, options = {}) =>
     drawChart(title, series, rows, start, end, resolution, max, (v) => number(v), options);
   chart("CPU · %", cpu, 100, { unit: "%" });
-  const inGiB = (value) => Number.isFinite(value) ? value / 2 ** 30 : null;
-  const capacity = (keys) => Math.max(1, ...rows.flatMap((s) => keys.map((key) => inGiB(s[key]))).filter(Number.isFinite));
-  const memoryPercent = chartUnits.memory === "%", diskPercent = chartUnits.disk === "%";
-  chart("Память", memoryPercent
-    ? [{ label: "RAM", value: memoryPct }, { label: "Swap", value: swapPct }]
-    : [{ label: "RAM", value: (s) => inGiB(memoryUsed(s)) }, field("Swap", "swap_used_bytes", 2 ** 30)],
-    memoryPercent ? 100 : capacity(["mem_total_bytes", "swap_total_bytes"]),
-    { id: "memory", unit: chartUnits.memory });
-  chart("Место на диске", [{ label: "Занято", value: diskPercent ? diskPct : (s) => inGiB(diskUsed(s)) }],
-    diskPercent ? 100 : capacity(["disk_total_bytes"]), { id: "disk", unit: chartUnits.disk });
+  // One absolute axis is valid only while the corresponding capacity is constant.
+  const capacity = (key) => {
+    const values = sourceRows.map((s) => s[key]).filter((v) => Number.isFinite(v) && v > 0);
+    return values.length && Math.max(...values) - Math.min(...values) <= 1 ? values[0] : null;
+  };
+  const ramCapacity = capacity("mem_total_bytes"), diskCapacity = capacity("disk_total_bytes");
+  chart("Память", [
+    { label: "RAM", value: memoryPct, describe: (s) => usageLabel(memoryPct(s), memoryUsed(s)) },
+    { label: "Swap", value: swapPct, describe: (s) => usageLabel(swapPct(s), s.swap_used_bytes) },
+  ], 100, { id: "memory", secondaryAxis: { label: "RAM, ГиБ", capacity: ramCapacity },
+    note: ramCapacity !== null ? "% — от объёма каждого типа памяти. Справа — ГиБ RAM."
+      : rows.length ? "Объём RAM менялся или неизвестен. ГиБ — в подсказке." : "" });
+  chart("Место на диске", [
+    { label: "Занято", value: diskPct, describe: (s) => usageLabel(diskPct(s), diskUsed(s)) },
+  ], 100, { id: "disk", secondaryAxis: { label: "ГиБ", capacity: diskCapacity },
+    note: rows.length && diskCapacity === null ? "Объём диска менялся или неизвестен. ГиБ — в подсказке." : "" });
   chart("Сеть · МиБ/с", [field("Входящий", "net_rx_bytes_s", 2 ** 20), field("Исходящий", "net_tx_bytes_s", 2 ** 20)], null, { unit: "МиБ/с" });
   chart("Дисковый I/O · МиБ/с", [field("Чтение", "disk_read_bytes_s", 2 ** 20), field("Запись", "disk_write_bytes_s", 2 ** 20)], null, { unit: "МиБ/с" });
 }
@@ -604,7 +609,6 @@ if (demo || config.enabled === true) {
       cache.clear();
       closeRangePicker(false);
       hideChartTooltips();
-      lastRender = null;
       byId("summary").replaceChildren();
       byId("charts").replaceChildren();
       byId("updated").textContent = "";

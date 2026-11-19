@@ -149,7 +149,7 @@ try {
   const now = Math.floor(Date.now() / 1000);
   const point = { ts: now, interval_s: 15, cpu_busy_pct: 45, cpu_iowait_pct: 2,
     cpu_steal_pct: 1, mem_total_bytes: 4 * 2 ** 30, mem_available_bytes: 2 * 2 ** 30,
-    swap_total_bytes: 0, swap_used_bytes: 0, net_rx_bytes_s: null, net_tx_bytes_s: null,
+    swap_total_bytes: 2 ** 30, swap_used_bytes: .5 * 2 ** 30, net_rx_bytes_s: null, net_tx_bytes_s: null,
     disk_total_bytes: 128 * 2 ** 30, disk_available_bytes: 64 * 2 ** 30,
     disk_read_bytes_s: null, disk_write_bytes_s: null, load1: 1, load5: .5, load15: .25 };
   const metricsBase = "https://metrics.example.test/public";
@@ -158,6 +158,7 @@ try {
       title: "Test", staleAfterSeconds: 420 })};` }));
   const received = [];
   let embedLive = false;
+  let resizedCapacity = false;
   const liveKeys = () => {
     const stamp = new Date(point.ts * 1000).toISOString();
     return [`hours/${stamp.slice(0, 10)}/${stamp.slice(11, 13)}.json`, `days/${stamp.slice(0, 10)}.json`];
@@ -170,7 +171,8 @@ try {
     else if (url.includes("/days/")) document = { schema: 1, resolution_s: 300,
       samples: [{ ...point, ts: Math.floor(now / 300) * 300, cpu_peak_pct: 90 }] };
     else if (url.includes("/hours/")) document = { schema: 1, resolution_s: 15,
-      samples: [point, { ...point, ts: now - 15 }] };
+      samples: [point, { ...point, ts: now - 15,
+        ...(resizedCapacity ? { mem_total_bytes: 8 * 2 ** 30, disk_total_bytes: 256 * 2 ** 30 } : {}) }] };
     if (embedLive && url.endsWith("latest.json")) {
       const [hour, day] = liveKeys();
       document.live_hour = { key: hour, resolution_s: 15, samples: [point, { ...point, ts: point.ts - 15 }] };
@@ -205,27 +207,45 @@ try {
     await page.mouse.move(plot.x + plot.width * fraction, plot.y + plot.height / 2);
     return card.locator(".chart-tooltip").innerText();
   };
-  // A known 2 GiB RAM / 64 GiB disk sample must retain its value when changing units.
+  // Equal percentages of RAM and swap have different byte values; the right memory axis is RAM only.
   await choosePeriod(1);
   await memory.getByRole("button", { name: "RAM", exact: true }).click();
-  const beforeUnits = received.length;
+  const beforeHover = received.length;
   const fixedWindow = await windowOf();
   const fraction = (now - fixedWindow.start) / (fixedWindow.end - fixedWindow.start) - .0001;
-  assert.match(await hoverAt(memory, fraction), /RAM: 50 %/);
-  await memory.locator("select").selectOption("ГиБ");
-  assert.match(await hoverAt(memory, fraction), /RAM: 2 ГиБ/);
+  const usage = await hoverAt(memory, fraction);
+  assert.match(usage, /RAM: 50 % · 2 ГиБ/);
+  assert.match(usage, /Swap: 50 % · 0,5 ГиБ/);
+  assert.equal(await memory.locator("select").count(), 0);
+  assert.equal(await memory.locator(".axis-unit").last().textContent(), "RAM, ГиБ");
+  assert.deepEqual(await memory.locator(".axis-right").allTextContents(), ["0", "1", "2", "3", "4"]);
   const disk = page.locator('[data-chart="disk"]');
-  assert.match(await hoverAt(disk, fraction), /Занято: 50 %/);
-  await disk.locator("select").selectOption("ГиБ");
-  assert.match(await hoverAt(disk, fraction), /Занято: 64 ГиБ/);
+  assert.match(await hoverAt(disk, fraction), /Занято: 50 % · 64 ГиБ/);
+  assert.equal(await disk.locator("select").count(), 0);
+  assert.deepEqual(await disk.locator(".axis-right").allTextContents(), ["0", "32", "64", "96", "128"]);
   assert.match(await hoverAt(disk, .5), /Нет измерения/);
-  assert.equal(received.length, beforeUnits, "Changing units requested data again");
+  assert.equal(received.length, beforeHover, "Hover requested data again");
   await memory.getByRole("button", { name: "Swap", exact: true }).click();
   assert.doesNotMatch(await hoverAt(memory, fraction), /Swap:/);
   await choosePeriod(2);
-  assert.equal(await memory.locator("select").inputValue(), "ГиБ");
-  assert.equal(await disk.locator("select").inputValue(), "ГиБ");
+  assert.equal(await memory.locator(".axis-right").count(), 5);
+  assert.equal(await disk.locator(".axis-right").count(), 5);
   assert.equal(await memory.locator('path[data-series="Swap"]').getAttribute("display"), "none");
+
+  // A capacity change makes a single GiB conversion invalid, but per-sample values remain exact.
+  resizedCapacity = true;
+  await page.locator("#refresh").click();
+  await settled();
+  assert.equal(await memory.locator(".axis-right").count(), 0);
+  assert.equal(await disk.locator(".axis-right").count(), 0);
+  assert.match(await memory.locator(".chart-note").innerText(), /Объём RAM менялся/);
+  const resizedWindow = await windowOf();
+  const olderFraction = (now - 15 - resizedWindow.start) / (resizedWindow.end - resizedWindow.start);
+  assert.match(await hoverAt(memory, olderFraction), /RAM: 75 % · 6 ГиБ/);
+  resizedCapacity = false;
+  await page.locator("#refresh").click();
+  await settled();
+  assert.equal(await memory.locator(".axis-right").count(), 5);
 
   // An exact local-time interval crossing UTC midnight must request both UTC dates.
   const previousDay = new Date((now - 2 * 86400) * 1000);
@@ -292,7 +312,7 @@ try {
   assert.ok(!received.includes(`${metricsBase}/${liveHour}`), "Open hour was requested separately");
   const liveWindow = await windowOf();
   assert.match(await hoverAt(disk, (point.ts - liveWindow.start) / (liveWindow.end - liveWindow.start)),
-    /Занято: 64 ГиБ/);
+    /Занято: 50 % · 64 ГиБ/);
   await choosePeriod(168);
   assert.ok(!received.includes(`${metricsBase}/${liveDay}`), "Open day was requested separately");
 
@@ -338,7 +358,7 @@ try {
       `Server selector overflowed at ${width}px`);
   }
   assert.deepEqual(errors, []);
-  console.log("PASS: disabled/demo; mobile/desktop dropdown; presets; exact dates; validation; drag/undo; units; hover; live batches; stale data; HTTP failure; server switching and direct links.");
+  console.log("PASS: disabled/demo; mobile/desktop dropdown; presets; exact dates; validation; drag/undo; dual axes; combined units; capacity changes; hover; live batches; stale data; HTTP failure; server switching and direct links.");
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));
