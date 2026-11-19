@@ -123,11 +123,11 @@ try {
     assert.equal(await page.locator("#range-popover").isVisible(), false);
   }
   for (const hours of [1, 2, 3, 6, 24, 168, 720]) await choosePeriod(hours);
-  for (const [hours, resolution] of [[168, 1800], [720, 7200]]) {
+  for (const [hours, resolution] of [[168, 3600], [720, 14400]]) {
     await choosePeriod(hours);
     assert.equal(await page.locator(".chart svg").first().getAttribute("data-resolution"), String(resolution));
     const path = await page.locator('path[data-series="Пик вычислений"]').getAttribute("d");
-    assert.ok((path.match(/[ML]/g) || []).length <= 365, "Long-range peak line was not reduced");
+    assert.ok((path.match(/[ML]/g) || []).length <= 185, "Long-range peak line was not reduced");
     assert.ok((path.match(/M/g) || []).length > 1, "Long-range averaging joined the data gap");
   }
   await choosePeriod(1);

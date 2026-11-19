@@ -425,8 +425,9 @@ function aggregateForChart(rows, sourceResolution, resolution) {
 function render(rows, start, end, resolution) {
   const sourceRows = rows;
   const quantum = Math.max(60, resolution);
+  const targetPoints = resolution >= 300 ? 180 : 360;
   const displayResolution = end - start > 3 * 3600
-    ? Math.max(resolution, Math.ceil((end - start) / 360 / quantum) * quantum) : resolution;
+    ? Math.max(resolution, Math.ceil((end - start) / targetPoints / quantum) * quantum) : resolution;
   if (displayResolution > resolution) rows = aggregateForChart(rows, resolution, displayResolution);
   resolution = displayResolution;
   const intervalLabel = resolution % 3600 === 0 ? `${number(resolution / 3600)} ч` : `${number(resolution / 60)} мин`;
